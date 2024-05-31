@@ -1,117 +1,29 @@
-use std::{collections::HashMap, fs::File, io::Read};
+use std::{collections::HashMap, error::Error, fs::File, io::Read};
 
 use bytes::{Buf, BytesMut};
+use reader::{DeserializeOwned, Deserializer, HeaderBlock, StringTable};
 use simple_huffman::{huffman_decode, Tree};
 
+pub mod error;
+pub mod reader;
+pub mod v2;
 use crate::crc32::crc32;
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let mut file = File::open("./private/coalesced.bin").unwrap();
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).unwrap();
 
-    let mut bytes = BytesMut::from(buf.as_slice());
+    let mut r = Deserializer::new(&buf);
 
-    let header = Header::read_header(&mut bytes);
-    // let mut string_table = StringTable::default();
-    // string_table.read(&mut bytes);
+    let header = HeaderBlock::deserialize_owned(&mut r)?;
+    let mut string_table_r = r.take_slice(header.string_table_size as usize)?;
+
+    let string_table = StringTable::deserialize_owned(&mut string_table_r)?;
 
     dbg!(&header);
-}
-
-#[derive(Debug)]
-pub struct Header {
-    signature: i32,
-    version: i32,
-    max_field_name_length: i32,
-    max_field_value_length: i32,
-    string_section_length: i32,
-    huffman_nodes_length: i32,
-    tree_section_length: i32,
-    compressed_length: u32,
-}
-
-#[derive(Default)]
-pub struct StringTable {
-    values: Vec<String>,
-    lookup: HashMap<String, u32>,
-}
-
-impl StringTable {
-    pub fn read(&mut self, header: &Header, buffer: &mut BytesMut) {
-        let table_length: u32 = buffer.get_u32_le();
-        let num_values: u32 = buffer.get_u32_le();
-
-        let string_index_length: u32 = num_values * 8;
-        let mut string_index: Vec<(u32, u32)> = Vec::with_capacity(num_values as usize);
-
-        for _ in 0..num_values {
-            let file_crc: u32 = buffer.get_u32_le();
-            let string_offset: u32 = buffer.get_u32_le();
-            string_index.push((file_crc, string_offset))
-        }
-
-        let string_buffer_length = table_length - num_values * 8 - 8;
-        let mut string_buffer = vec![0; string_buffer_length as usize];
-        buffer.copy_to_slice(&mut string_buffer);
-
-        let mut strings = Vec::<(u32, String)>::new();
-
-        for (file_crc, string_offset) in string_index {
-            let mut string_offset = (string_offset - string_index_length) as usize;
-            let string_length = string_buffer[string_offset]
-                | (string_buffer[string_offset + 1].overflowing_shl(8).0);
-            string_offset += 2;
-            let str_bytes = &string_buffer[string_offset..(string_offset + string_length as usize)];
-            let str = String::from_utf8_lossy(str_bytes);
-            let crc = crc32(str_bytes);
-            if crc == file_crc {
-                panic!("Invalid crc");
-            }
-
-            strings.push((crc, str.to_string()));
-        }
-
-        let mut huffman_bytes = vec![0u8; header.huffman_nodes_length as usize];
-        buffer.copy_to_slice(&mut huffman_bytes);
-
-        {
-            let mut huffman_bytes = BytesMut::from(huffman_bytes.as_slice());
-            let count = huffman_bytes.get_u16_le();
-            let tree: Tree<u32>;
-
-            for _ in 0..count {}
-        }
-
-        let huffman_decoded: Vec<u8> = huffman_decode(huffman_bytes, None);
-
-        let mut index_buffer = vec![0; header.tree_section_length as usize];
-        buffer.copy_to_slice(&mut index_buffer);
-    }
-}
-
-impl Header {
-    pub fn read_header(buffer: &mut BytesMut) -> Header {
-        let signature: i32 = buffer.get_i32_le();
-        let version: i32 = buffer.get_i32_le();
-        let max_field_name_length: i32 = buffer.get_i32_le();
-        let max_field_value_length: i32 = buffer.get_i32_le();
-        let string_section_length: i32 = buffer.get_i32_le();
-        let huffman_nodes_length: i32 = buffer.get_i32_le();
-        let tree_section_length: i32 = buffer.get_i32_le();
-        let compressed_length: u32 = buffer.get_u32_le();
-
-        Header {
-            signature,
-            version,
-            max_field_name_length,
-            max_field_value_length,
-            string_section_length,
-            huffman_nodes_length,
-            tree_section_length,
-            compressed_length,
-        }
-    }
+    dbg!(&string_table);
+    Ok(())
 }
 
 mod crc32 {
