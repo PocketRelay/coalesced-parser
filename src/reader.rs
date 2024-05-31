@@ -214,7 +214,7 @@ impl DeserializeOwned for HeaderBlock {
 
 #[derive(Debug)]
 pub struct StringTable {
-    values: Vec<String>,
+    pub values: Vec<String>,
 }
 
 impl DeserializeOwned for StringTable {
@@ -245,4 +245,27 @@ impl DeserializeOwned for StringTable {
 
         Ok(Self { values })
     }
+}
+
+#[derive(Debug)]
+pub struct HuffmanTree(pub Vec<(i32, i32)>);
+
+impl DeserializeOwned for HuffmanTree {
+    fn deserialize_owned(r: &mut Deserializer<'_>) -> DecodeResult<Self> {
+        let count = u16::deserialize_owned(r)?;
+        let mut values = Vec::new();
+        for _ in 0..count {
+            let left = i32::deserialize_owned(r)?;
+            let right = i32::deserialize_owned(r)?;
+            values.push((left, right))
+        }
+        Ok(HuffmanTree(values))
+    }
+}
+
+fn huffman_decode(tree: &HuffmanTree, data: &[u8], offset: usize, max_length: usize) -> String {
+    let mut bytes: Vec<u8> = Vec::new();
+    let start = tree.0.len() - 1;
+
+    todo!()
 }

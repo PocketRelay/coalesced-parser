@@ -1,13 +1,19 @@
-use std::{collections::HashMap, error::Error, fs::File, io::Read};
+use std::{collections::HashMap, error::Error, fs::File, io::Read, ops::BitAnd};
 
 use bytes::{Buf, BytesMut};
-use reader::{DeserializeOwned, Deserializer, HeaderBlock, StringTable};
+use reader::{DeserializeOwned, Deserializer, HeaderBlock, HuffmanTree, StringTable};
 use simple_huffman::{huffman_decode, Tree};
 
 pub mod error;
 pub mod reader;
 pub mod v2;
 use crate::crc32::crc32;
+
+#[derive(Debug)]
+pub struct PropertyValue {
+    pub ty: u32,
+    pub text: Option<String>,
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut file = File::open("./private/coalesced.bin").unwrap();
@@ -21,8 +27,90 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let string_table = StringTable::deserialize_owned(&mut string_table_r)?;
 
+    let mut huffman_r = r.take_slice(header.huffman_size as usize)?;
+    let huffman_tree = HuffmanTree::deserialize_owned(&mut huffman_r)?;
+
+    let mut index_r = r.take_slice(header.index_size as usize)?;
+
+    let total_bits = i32::deserialize_owned(&mut r);
+
+    let mut data_r = r.take_slice(header.data_size as usize)?;
+
+    let files_count = u16::deserialize_owned(&mut index_r)?;
+
+    let mut file_offsets = Vec::new();
+
+    for _ in 0..files_count {
+        let file_name_index = u16::deserialize_owned(&mut index_r)?;
+        let file_offset = u32::deserialize_owned(&mut index_r)?;
+        let file_name = string_table.values.get(file_name_index as usize).unwrap();
+
+        file_offsets.push((file_name, file_offset));
+    }
+
     dbg!(&header);
     dbg!(&string_table);
+    dbg!(&huffman_tree);
+    dbg!(&file_offsets);
+
+    for (file_name, file_offset) in file_offsets {
+        index_r.seek(file_offset as usize)?;
+
+        let sections_count = u16::deserialize_owned(&mut index_r)?;
+
+        let mut section_offsets = Vec::new();
+        for _ in 0..sections_count {
+            let section_name_index = u16::deserialize_owned(&mut index_r)?;
+            let section_offset = u32::deserialize_owned(&mut index_r)?;
+            let section_name = string_table
+                .values
+                .get(section_name_index as usize)
+                .unwrap();
+            section_offsets.push((section_name, section_offset));
+        }
+
+        for (section_name, section_offset) in section_offsets {
+            index_r.seek(file_offset as usize + section_offset as usize)?;
+
+            let value_count = u16::deserialize_owned(&mut index_r)?;
+
+            let mut value_offsets = Vec::new();
+            for _ in 0..value_count {
+                let value_name_index = u16::deserialize_owned(&mut index_r)?;
+                let value_offset = u32::deserialize_owned(&mut index_r)?;
+                let value_name = string_table.values.get(value_name_index as usize).unwrap();
+                value_offsets.push((value_name, value_offset));
+            }
+
+            for (value_name, value_offset) in value_offsets {
+                index_r
+                    .seek(file_offset as usize + section_offset as usize + value_offset as usize)?;
+
+                let item_count = u16::deserialize_owned(&mut index_r)?;
+
+                let mut value = Vec::new();
+
+                for _ in 0..item_count {
+                    let item_offset = u32::deserialize_owned(&mut index_r)?;
+                    let ty = (item_offset & 0xE0000000) >> 29;
+
+                    match ty {
+                        1 => value.push(PropertyValue { ty: 1, text: None }),
+                        0 | 2 | 3 | 4 => {
+                            let item_offset = item_offset.bitand(0x1fffffff);
+                            let text = "TODO: HUFFMAN".to_string();
+                            value.push(PropertyValue {
+                                ty: 1,
+                                text: Some(text),
+                            })
+                        }
+                        _ => panic!("Unknown type"),
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
