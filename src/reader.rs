@@ -1,6 +1,96 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    cmp::Ordering,
+    collections::{BinaryHeap, HashMap, HashSet, VecDeque},
+    ptr::NonNull,
+    rc::Rc,
+};
+
+use bitvec::{index, vec::BitVec};
 
 use crate::error::{DecodeError, DecodeResult};
+
+#[derive(Default)]
+pub struct Serializer {
+    pub buffer: Vec<u8>,
+    pub cursor: usize,
+    pub length: usize,
+}
+
+impl Serializer {
+    pub fn to_vec(mut self) -> Vec<u8> {
+        self.buffer.truncate(self.length);
+        self.buffer
+    }
+
+    pub fn write_u32(&mut self, value: u32) {
+        let data = self.get_slice_mut(4);
+        data.copy_from_slice(&value.to_le_bytes());
+        self.cursor += 4;
+
+        if self.cursor > self.length {
+            self.length = self.cursor;
+        }
+    }
+
+    pub fn write_u16(&mut self, value: u16) {
+        let data = self.get_slice_mut(2);
+        data.copy_from_slice(&value.to_le_bytes());
+        self.cursor += 2;
+
+        if self.cursor > self.length {
+            self.length = self.cursor;
+        }
+    }
+
+    pub fn write_i32(&mut self, value: i32) {
+        let data = self.get_slice_mut(4);
+        data.copy_from_slice(&value.to_le_bytes());
+        self.cursor += 4;
+
+        if self.cursor > self.length {
+            self.length = self.cursor;
+        }
+    }
+
+    pub fn write_i16(&mut self, value: i16) {
+        let data = self.get_slice_mut(2);
+        data.copy_from_slice(&value.to_le_bytes());
+        self.cursor += 2;
+
+        if self.cursor > self.length {
+            self.length = self.cursor;
+        }
+    }
+
+    pub fn write_slice(&mut self, value: &[u8]) {
+        let data = self.get_slice_mut(value.len());
+        data.copy_from_slice(value);
+        self.cursor += value.len();
+
+        if self.cursor > self.length {
+            self.length = self.cursor;
+        }
+    }
+
+    pub fn seek(&mut self, cursor: usize) {
+        self.cursor = cursor;
+    }
+
+    pub fn get_slice_mut(&mut self, length: usize) -> &mut [u8] {
+        let start = self.cursor;
+        let end = self.cursor + length;
+
+        let buffer_length = self.buffer.len();
+
+        if start > buffer_length || end > buffer_length {
+            self.buffer.resize(end, 0);
+        }
+
+        &mut self.buffer[start..end]
+    }
+}
 
 pub struct Deserializer<'de> {
     /// Buffer storing the bytes to be deserialized
@@ -86,44 +176,9 @@ impl<'de> Deserializer<'de> {
     }
 }
 
-pub fn huffman_decode(
-    compressed_data: &[u8],
-    nodes: &[i32],
-    position: usize,
-    max_length: usize,
-) -> String {
-    let mut sb = String::new();
-    let mut cur_node = nodes.len() - 2;
-    let end = compressed_data.len() * 8;
-
-    let mut pos = position;
-
-    while pos < end && sb.len() < max_length {
-        let sample = compressed_data[pos / 8] & (1 << (pos % 8));
-        let next = nodes[cur_node + if sample != 0 { 1 } else { 0 }];
-
-        if next < 0 {
-            let ch = (-1 - next) as u16;
-            if ch == 0 {
-                break;
-            }
-            sb.push(ch as u8 as char);
-            cur_node = nodes.len() - 2;
-        } else {
-            cur_node = next as usize * 2;
-            if cur_node > nodes.len() {
-                panic!("The decompression nodes are malformed.");
-            }
-        }
-
-        pos += 1;
-    }
-
-    sb
-}
-
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Coalesced {
+    pub version: u32,
     pub files: Vec<CoalFile>,
 }
 
@@ -153,6 +208,268 @@ pub struct PropertyValue {
     pub text: Option<String>,
 }
 
+pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
+    let mut keys: HashSet<&str> = HashSet::new();
+
+    let mut blob = String::new();
+    let mut max_value_length = 0;
+
+    for file in &coalesced.files {
+        keys.insert(&file.name);
+
+        for section in &file.sections {
+            keys.insert(&section.name);
+
+            for value in &section.values {
+                keys.insert(&value.name);
+
+                for item in &value.properties {
+                    if let Some(text) = &item.text {
+                        // Blob of null terminated values
+                        blob.push_str(text);
+                        blob.push('\0');
+
+                        let value_length = text.len();
+                        if value_length > max_value_length {
+                            max_value_length = value_length;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut keys: Vec<&str> = keys.into_iter().collect();
+    keys.sort_by_key(|a| hash_crc32(a.as_bytes()));
+
+    let mut max_key_length = 0;
+    for key in &keys {
+        let key_len = key.len();
+        if key_len > max_key_length {
+            max_key_length = key_len;
+        }
+    }
+
+    // Build the string table buffer
+    let string_table_buffer: Vec<u8> = {
+        let mut string_table_buffer = Serializer::default();
+        string_table_buffer.seek(4); // Skip writing length till later
+        string_table_buffer.write_u32(keys.len() as u32); // Total number of keys
+
+        string_table_buffer.seek(4 + 4 + (8 * keys.len()));
+
+        let mut offsets: Vec<(u32, u32)> = Vec::new();
+
+        // Write the data table
+        for key in &keys {
+            let offset = string_table_buffer.cursor as u32;
+
+            let bytes: &[u8] = key.as_bytes();
+            let bytes_len = bytes.len();
+
+            let hash = hash_crc32(bytes);
+
+            string_table_buffer.write_u16(bytes_len as u16);
+            string_table_buffer.write_slice(bytes);
+
+            offsets.push((hash, offset))
+        }
+
+        // Seek to start of table
+        string_table_buffer.seek(8);
+
+        // Write the offsets
+        for (hash, offset) in offsets {
+            string_table_buffer.write_u32(hash);
+            string_table_buffer.write_u32(offset - 8);
+        }
+
+        // Return to start and write length
+        string_table_buffer.seek(0);
+        string_table_buffer.write_u32(string_table_buffer.length as u32);
+
+        string_table_buffer.to_vec()
+    };
+
+    let huffman = Huffman::new(&blob);
+
+    let huffman_buffer = {
+        let mut huffman_buffer: Vec<u8> = Vec::new();
+
+        let pairs = huffman.collect_pairs();
+        //Write the length of pairs
+        huffman_buffer.extend_from_slice(&(pairs.len() as u16).to_le_bytes());
+
+        // Write the pairs
+        for pair in pairs {
+            huffman_buffer.extend_from_slice(&(pair.0).to_le_bytes());
+            huffman_buffer.extend_from_slice(&(pair.1).to_le_bytes());
+        }
+
+        huffman_buffer
+    };
+
+    let huffman_size: usize = huffman_buffer.len();
+
+    let mut data_buffer: BitVec = BitVec::new();
+
+    let index_buffer = {
+        let mut index_buffer: Serializer = Serializer::default();
+
+        let mut file_data_offset = 2 /* file counts */ + (coalesced.files.len() * 6);
+
+        let mut files: Vec<(u16, u32)> = Vec::new();
+
+        for file in &coalesced.files {
+            files.push((
+                keys.iter().position(|key| key.eq(&file.name)).unwrap() as u16,
+                file_data_offset as u32,
+            ));
+
+            let mut section_data_offset = 2 /* file counts */ + (file.sections.len() * 6);
+            let mut sections: Vec<(u16, u32)> = Vec::new();
+
+            for section in &file.sections {
+                sections.push((
+                    keys.iter().position(|key| key.eq(&section.name)).unwrap() as u16,
+                    section_data_offset as u32,
+                ));
+
+                let mut value_data_offset = 2 /* file counts */ + (section.values.len() * 6);
+                let mut values: Vec<(u16, u32)> = Vec::new();
+
+                for value in &section.values {
+                    index_buffer.seek(file_data_offset + section_data_offset + value_data_offset);
+
+                    values.push((
+                        keys.iter().position(|key| key.eq(&value.name)).unwrap() as u16,
+                        value_data_offset as u32,
+                    ));
+
+                    index_buffer.write_u16(value.properties.len() as u16);
+                    value_data_offset += 2;
+
+                    for item in &value.properties {
+                        let bit_offset = data_buffer.len();
+
+                        match item.ty {
+                            1 => index_buffer.write_u32((1 << 29) | (bit_offset as u32)),
+                            0 | 2 | 3 | 4 => {
+                                index_buffer.write_u32((item.ty << 29) | (bit_offset as u32));
+                                let mut value = item.text.clone().unwrap_or_default();
+                                value.push('\0');
+
+                                encode_huffman(&value, &huffman.mapping, &mut data_buffer);
+
+                                // println!("{}", (data_buffer.len() - bit_offset) / 8)
+                            }
+                            _ => panic!("Unknown type"),
+                        }
+
+                        value_data_offset += 4;
+                    }
+                }
+
+                index_buffer.seek(file_data_offset + section_data_offset);
+
+                index_buffer.write_u16(values.len() as u16);
+
+                section_data_offset += 2;
+
+                for value in values {
+                    index_buffer.write_u16(value.0);
+                    index_buffer.write_u32(value.1);
+
+                    section_data_offset += 6;
+                }
+
+                section_data_offset += value_data_offset;
+            }
+
+            index_buffer.seek(file_data_offset);
+
+            index_buffer.write_u16(sections.len() as u16);
+            file_data_offset += 2;
+
+            for section in sections {
+                index_buffer.write_u16(section.0);
+                index_buffer.write_u32(section.1);
+
+                file_data_offset += 6;
+            }
+
+            file_data_offset += section_data_offset;
+        }
+
+        index_buffer.seek(0);
+
+        index_buffer.write_u16(files.len() as u16);
+
+        for file in files {
+            index_buffer.write_u16(file.0);
+            index_buffer.write_u32(file.1);
+        }
+
+        index_buffer.to_vec()
+    };
+
+    let index_size: usize = index_buffer.len();
+
+    let total_bits = data_buffer.len();
+    let data_bytes = bit_to_bytes(data_buffer);
+    let data_size: usize = data_bytes.len();
+
+    let mut out = Vec::new();
+
+    // Write the headers
+    out.extend_from_slice(&0x666D726Du32.to_le_bytes());
+    out.extend_from_slice(&coalesced.version.to_le_bytes());
+    out.extend_from_slice(&(max_key_length as u32).to_le_bytes());
+    out.extend_from_slice(&(max_value_length as u32).to_le_bytes());
+    out.extend_from_slice(&(string_table_buffer.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(huffman_size as u32).to_le_bytes());
+    out.extend_from_slice(&(index_size as u32).to_le_bytes());
+    out.extend_from_slice(&(data_size as u32).to_le_bytes());
+
+    println!("Write dat size: {}", data_size);
+    println!("Write Data {:?}", &data_bytes[0..10]);
+
+    // Write all the block buffers
+    out.extend_from_slice(&string_table_buffer);
+    out.extend_from_slice(&huffman_buffer);
+    out.extend_from_slice(&index_buffer);
+    out.extend_from_slice(&(total_bits as u32).to_le_bytes());
+    out.extend_from_slice(&data_bytes);
+
+    out
+}
+
+fn bit_to_bytes(bits: BitVec) -> Vec<u8> {
+    let mut result = Vec::new();
+    let mut current_byte = 0u8;
+    let mut bit_count = 0;
+
+    for bit in bits {
+        if bit_count == 8 {
+            result.push(current_byte);
+            current_byte = 0;
+            bit_count = 0;
+        }
+
+        if bit {
+            current_byte |= 1 << (7 - bit_count);
+        }
+
+        bit_count += 1;
+    }
+
+    if bit_count > 0 {
+        result.push(current_byte);
+    }
+
+    result
+}
+
 pub fn read_coalesced(r: &mut Deserializer) -> DecodeResult<Coalesced> {
     // Read the file header
     let magic = r.read_u32()?;
@@ -161,13 +478,14 @@ pub fn read_coalesced(r: &mut Deserializer) -> DecodeResult<Coalesced> {
         return Err(DecodeError::Other("Not a ME3 coalesced file"));
     }
 
-    let _version = r.read_u32()?;
+    let version = r.read_u32()?;
     let _max_field_name_length = r.read_u32()?;
     let max_value_length = r.read_u32()?;
     let string_table_size = r.read_u32()?;
     let huffman_size = r.read_u32()?;
     let index_size = r.read_u32()?;
     let data_size = r.read_u32()?;
+    println!("Read dat size: {}", data_size);
 
     // Read the string lookup table
     let string_table: Vec<String> = {
@@ -209,21 +527,24 @@ pub fn read_coalesced(r: &mut Deserializer) -> DecodeResult<Coalesced> {
     };
 
     // Read the huffman tree
-    let huffman_tree: Vec<i32> = {
+    let huffman_tree: Vec<(i32, i32)> = {
         let mut huffman_tree_block = r.take_slice(huffman_size as usize)?;
 
         // Read the length of the tree
         let count = huffman_tree_block.read_u16()?;
 
-        let mut values = Vec::with_capacity((count.saturating_mul(2)) as usize);
+        let mut values = Vec::with_capacity(count as usize);
 
-        for _ in 0..(count.saturating_mul(2)) {
-            let value = huffman_tree_block.read_i32()?;
-            values.push(value)
+        for _ in 0..count {
+            let left = huffman_tree_block.read_i32()?;
+            let right = huffman_tree_block.read_i32()?;
+            values.push((left, right))
         }
 
         values
     };
+
+    println!("Read pairs {huffman_tree:?}");
 
     // Read the index block
     let mut index_block: Deserializer = r.take_slice(index_size as usize)?;
@@ -236,6 +557,8 @@ pub fn read_coalesced(r: &mut Deserializer) -> DecodeResult<Coalesced> {
         let block = r.take_slice(data_size as usize)?;
         block.buffer
     };
+
+    println!("Read Data {:?}", &data_block[0..10]);
 
     // Read the number of files
     let files_count = index_block.read_u16()?;
@@ -326,7 +649,7 @@ pub fn read_coalesced(r: &mut Deserializer) -> DecodeResult<Coalesced> {
                                 max_value_length as usize,
                             );
                             items.push(PropertyValue {
-                                ty: 1,
+                                ty,
                                 text: Some(text),
                             })
                         }
@@ -352,7 +675,7 @@ pub fn read_coalesced(r: &mut Deserializer) -> DecodeResult<Coalesced> {
         })
     }
 
-    let coalesced = Coalesced { files };
+    let coalesced = Coalesced { version, files };
 
     Ok(coalesced)
 }
@@ -399,4 +722,259 @@ fn hash_crc32(bin_data: &[u8]) -> u32 {
         hash = CRC32_TABLE[((hash >> 24) as u8 ^ t) as usize] ^ (hash << 8);
     }
     !hash
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+enum HuffmanTree {
+    Node(Box<HuffmanTree>, Box<HuffmanTree>),
+    Leaf(char, usize),
+}
+
+impl HuffmanTree {
+    fn frequency(&self) -> usize {
+        match *self {
+            HuffmanTree::Node(ref left, ref right) => left.frequency() + right.frequency(),
+            HuffmanTree::Leaf(_, freq) => freq,
+        }
+    }
+}
+
+impl Ord for HuffmanTree {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.frequency().cmp(&self.frequency())
+    }
+}
+
+impl PartialOrd for HuffmanTree {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn build_huffman_tree(text: &str) -> HuffmanTree {
+    let mut frequency_map = HashMap::new();
+
+    for c in text.chars() {
+        *frequency_map.entry(c).or_insert(0) += 1;
+    }
+
+    println!("r {}", &frequency_map[&'r']);
+    println!("l {}", &frequency_map[&'l']);
+    let mut heap = BinaryHeap::new();
+
+    for (char, freq) in frequency_map {
+        heap.push(HuffmanTree::Leaf(char, freq));
+    }
+
+    while heap.len() > 1 {
+        let left = heap.pop().unwrap();
+        let right = heap.pop().unwrap();
+        heap.push(HuffmanTree::Node(Box::new(left), Box::new(right)));
+    }
+
+    heap.pop().unwrap()
+}
+
+fn generate_huffman_codes(node: &HuffmanTree, prefix: BitVec, codes: &mut HashMap<char, BitVec>) {
+    match node {
+        HuffmanTree::Node(left, right) => {
+            let mut left_prefix = prefix.clone();
+            left_prefix.push(false);
+            generate_huffman_codes(left, left_prefix, codes);
+
+            let mut right_prefix = prefix;
+            right_prefix.push(true);
+            generate_huffman_codes(right, right_prefix, codes);
+        }
+        HuffmanTree::Leaf(char, _) => {
+            codes.insert(*char, prefix);
+        }
+    }
+}
+
+// Encode the input text
+fn encode_huffman(text: &str, codes: &HashMap<char, BitVec>, output: &mut BitVec) {
+    for character in text.chars() {
+        if let Some(code) = codes.get(&character) {
+            output.extend(code);
+        }
+    }
+}
+
+pub struct Huffman {
+    tree: HuffmanTree,
+    mapping: HashMap<char, BitVec>,
+}
+
+impl Huffman {
+    pub fn new(str: &str) -> Self {
+        let huffman_tree = build_huffman_tree(str);
+        let mut huffman_mapping = HashMap::new();
+        generate_huffman_codes(&huffman_tree, BitVec::new(), &mut huffman_mapping);
+        Self {
+            tree: huffman_tree,
+            mapping: huffman_mapping,
+        }
+    }
+
+    fn flatten_nodes<'b, 'a: 'b>(tree: &'a HuffmanTree, out: &mut Vec<&'b HuffmanTree>) {
+        match tree {
+            HuffmanTree::Node(left, right) => {
+                Self::flatten_nodes(left, out);
+                Self::flatten_nodes(right, out);
+                out.push(tree)
+            }
+            HuffmanTree::Leaf(_, _) => {}
+        }
+    }
+
+    pub fn collect_pairs_2(&self) -> Vec<(i32, i32)> {
+        let mut flat_nodes: Vec<&HuffmanTree> = Vec::new();
+        Self::flatten_nodes(&self.tree, &mut flat_nodes);
+        let mut pairs = Vec::new();
+
+        for node in &flat_nodes {
+            match node {
+                HuffmanTree::Node(left, right) => {
+                    let left = if let HuffmanTree::Leaf(symbol, _) = left.as_ref() {
+                        -1 - *symbol as i32
+                    } else {
+                        flat_nodes
+                            .iter()
+                            .position(|a| std::ptr::eq(left.as_ref(), *a))
+                            .map(|value| (value + 1) as i32)
+                            .unwrap_or(-1)
+                    };
+
+                    let right = if let HuffmanTree::Leaf(symbol, _) = right.as_ref() {
+                        -1 - *symbol as i32
+                    } else {
+                        flat_nodes
+                            .iter()
+                            .position(|a| std::ptr::eq(right.as_ref(), *a))
+                            .map(|value| (value + 1) as i32)
+                            .unwrap_or(-1)
+                    };
+
+                    pairs.push((left, right));
+                }
+                HuffmanTree::Leaf(_, _) => {}
+            };
+        }
+        println!("Collected pairs {pairs:?}");
+
+        pairs
+    }
+
+    pub fn collect_pairs(&self) -> Vec<(i32, i32)> {
+        let mut pairs: Vec<Rc<RefCell<(i32, i32)>>> = Vec::new();
+        let mut mapping: HashMap<*const HuffmanTree, Rc<RefCell<(i32, i32)>>> = HashMap::new();
+        let mut queue: VecDeque<&HuffmanTree> = VecDeque::new();
+
+        let root_pair = Rc::new(RefCell::new((0, 0)));
+
+        mapping.insert(&self.tree, root_pair.clone());
+        queue.push_back(&self.tree);
+
+        while let Some(node) = queue.pop_front() {
+            let item = mapping.get(&(node as *const _)).unwrap().clone();
+
+            match node {
+                HuffmanTree::Node(left_node, right_node) => {
+                    if let HuffmanTree::Leaf(symbol, _) = left_node.as_ref() {
+                        item.borrow_mut().0 = -1 - *symbol as i32;
+                    } else {
+                        let left = Rc::new(RefCell::new((0, 0)));
+
+                        // Add empty left pair
+                        mapping.insert(left_node.as_ref(), left.clone());
+                        pairs.push(left.clone());
+
+                        // Queue the left node
+                        queue.push_back(left_node.as_ref());
+
+                        {
+                            let index = pairs
+                                .iter()
+                                .position(|a| Rc::ptr_eq(a, &left))
+                                .map(|value| (value) as i32)
+                                .unwrap_or(-1);
+
+                            item.borrow_mut().0 = index;
+                        }
+                    }
+
+                    if let HuffmanTree::Leaf(symbol, _) = right_node.as_ref() {
+                        item.borrow_mut().1 = -1 - *symbol as i32;
+
+                        if -1 - *symbol as i32 == -115 {
+                            println!("Symbol: {}", symbol);
+                        }
+                    } else {
+                        let right = Rc::new(RefCell::new((0, 0)));
+
+                        // Add empty right pair
+                        mapping.insert(right_node.as_ref(), right.clone());
+                        pairs.push(right.clone());
+
+                        queue.push_back(right_node.as_ref());
+
+                        {
+                            let index = pairs
+                                .iter()
+                                .position(|a| Rc::ptr_eq(a, &right))
+                                .map(|value| (value) as i32)
+                                .unwrap_or(-1);
+                            item.borrow_mut().1 = index;
+                        }
+                    }
+                }
+                HuffmanTree::Leaf(_, _) => {
+                    panic!("Invalid operation: leaf node in queue");
+                }
+            }
+        }
+        pairs.push(root_pair);
+
+        let pairs = pairs.into_iter().map(|value| *value.borrow()).collect();
+        println!("Collected pairs {pairs:?}");
+        pairs
+    }
+}
+
+pub fn huffman_decode(
+    compressed_data: &[u8],
+    pairs: &[(i32, i32)],
+    position: usize,
+    max_length: usize,
+) -> String {
+    let mut sb = String::new();
+    let mut cur_node = pairs.len() - 1;
+    let end = compressed_data.len() * 8;
+
+    let mut pos = position;
+
+    while pos < end && sb.len() < max_length {
+        let sample = compressed_data[pos / 8] & (1 << (pos % 8));
+        let next = pairs[cur_node];
+        let next = if sample != 0 { next.1 } else { next.0 };
+
+        if next < 0 {
+            let ch = (-1 - next) as u16;
+            if ch == 0 {
+                break;
+            }
+            sb.push(ch as u8 as char);
+            cur_node = pairs.len() - 1;
+        } else {
+            cur_node = next as usize;
+            if cur_node > pairs.len() {
+                panic!("The decompression nodes are malformed.");
+            }
+        }
+
+        pos += 1;
+    }
+
+    sb
 }
