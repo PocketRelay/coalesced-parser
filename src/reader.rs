@@ -3,11 +3,12 @@ use std::{
     cell::RefCell,
     cmp::Ordering,
     collections::{BinaryHeap, HashMap, HashSet, VecDeque},
+    hash::Hash,
     ptr::NonNull,
     rc::Rc,
 };
 
-use bitvec::{index, vec::BitVec};
+use bitvec::{access::BitSafeU8, index, order::Lsb0, store::BitStore, vec::BitVec};
 
 use crate::error::{DecodeError, DecodeResult};
 
@@ -294,24 +295,29 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
     let huffman = Huffman::new(&blob);
 
     let huffman_buffer = {
-        let mut huffman_buffer: Vec<u8> = Vec::new();
+        let mut huffman_buffer: Serializer = Serializer::default();
 
         let pairs = huffman.collect_pairs();
+        // let pairs2 = flatten_huffman_tree(huffman.tree.clone());
+
+        println!("Write pairs: {:?}", pairs);
+        // println!("Write pairs 2: {:?}", pairs2);
+
         //Write the length of pairs
-        huffman_buffer.extend_from_slice(&(pairs.len() as u16).to_le_bytes());
+        huffman_buffer.write_u16(pairs.len() as u16);
 
         // Write the pairs
-        for pair in pairs {
-            huffman_buffer.extend_from_slice(&(pair.0).to_le_bytes());
-            huffman_buffer.extend_from_slice(&(pair.1).to_le_bytes());
+        for (left, right) in pairs {
+            huffman_buffer.write_i32(left);
+            huffman_buffer.write_i32(right);
         }
 
-        huffman_buffer
+        huffman_buffer.to_vec()
     };
 
     let huffman_size: usize = huffman_buffer.len();
 
-    let mut data_buffer: BitVec = BitVec::new();
+    let mut data_buffer: BitVec<BitSafeU8, Lsb0> = BitVec::new();
 
     let index_buffer = {
         let mut index_buffer: Serializer = Serializer::default();
@@ -326,7 +332,7 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
                 file_data_offset as u32,
             ));
 
-            let mut section_data_offset = 2 /* file counts */ + (file.sections.len() * 6);
+            let mut section_data_offset = 2 + (file.sections.len() * 6);
             let mut sections: Vec<(u16, u32)> = Vec::new();
 
             for section in &file.sections {
@@ -335,7 +341,7 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
                     section_data_offset as u32,
                 ));
 
-                let mut value_data_offset = 2 /* file counts */ + (section.values.len() * 6);
+                let mut value_data_offset = 2 + (section.values.len() * 6);
                 let mut values: Vec<(u16, u32)> = Vec::new();
 
                 for value in &section.values {
@@ -360,8 +366,6 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
                                 value.push('\0');
 
                                 encode_huffman(&value, &huffman.mapping, &mut data_buffer);
-
-                                // println!("{}", (data_buffer.len() - bit_offset) / 8)
                             }
                             _ => panic!("Unknown type"),
                         }
@@ -419,6 +423,8 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
     let data_bytes = bit_to_bytes(data_buffer);
     let data_size: usize = data_bytes.len();
 
+    println!("Write data bits: {}", total_bits);
+
     let mut out = Vec::new();
 
     // Write the headers
@@ -432,7 +438,6 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
     out.extend_from_slice(&(data_size as u32).to_le_bytes());
 
     println!("Write dat size: {}", data_size);
-    println!("Write Data {:?}", &data_bytes[0..10]);
 
     // Write all the block buffers
     out.extend_from_slice(&string_table_buffer);
@@ -444,30 +449,13 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
     out
 }
 
-fn bit_to_bytes(bits: BitVec) -> Vec<u8> {
-    let mut result = Vec::new();
-    let mut current_byte = 0u8;
-    let mut bit_count = 0;
-
-    for bit in bits {
-        if bit_count == 8 {
-            result.push(current_byte);
-            current_byte = 0;
-            bit_count = 0;
-        }
-
-        if bit {
-            current_byte |= 1 << (7 - bit_count);
-        }
-
-        bit_count += 1;
-    }
-
-    if bit_count > 0 {
-        result.push(current_byte);
-    }
-
-    result
+fn bit_to_bytes(mut bits: BitVec<BitSafeU8, Lsb0>) -> Vec<u8> {
+    // Convert the bits to bytes
+    bits.set_uninitialized(false);
+    bits.into_vec()
+        .into_iter()
+        .map(|value| value.load_value())
+        .collect()
 }
 
 pub fn read_coalesced(r: &mut Deserializer) -> DecodeResult<Coalesced> {
@@ -485,7 +473,6 @@ pub fn read_coalesced(r: &mut Deserializer) -> DecodeResult<Coalesced> {
     let huffman_size = r.read_u32()?;
     let index_size = r.read_u32()?;
     let data_size = r.read_u32()?;
-    println!("Read dat size: {}", data_size);
 
     // Read the string lookup table
     let string_table: Vec<String> = {
@@ -553,12 +540,13 @@ pub fn read_coalesced(r: &mut Deserializer) -> DecodeResult<Coalesced> {
         // Read the total bits count
         let _total_bits = r.read_u32()?;
 
+        println!("Read data bits: {} {}", _total_bits as f32 / 8., data_size);
+        println!("Read dat size: {}", data_size);
+
         // Read the data block
         let block = r.take_slice(data_size as usize)?;
         block.buffer
     };
-
-    println!("Read Data {:?}", &data_block[0..10]);
 
     // Read the number of files
     let files_count = index_block.read_u16()?;
@@ -724,14 +712,14 @@ fn hash_crc32(bin_data: &[u8]) -> u32 {
     !hash
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 enum HuffmanTree {
-    Node(Box<HuffmanTree>, Box<HuffmanTree>),
-    Leaf(char, usize),
+    Node(Rc<HuffmanTree>, Rc<HuffmanTree>),
+    Leaf(char, u32),
 }
 
 impl HuffmanTree {
-    fn frequency(&self) -> usize {
+    fn frequency(&self) -> u32 {
         match *self {
             HuffmanTree::Node(ref left, ref right) => left.frequency() + right.frequency(),
             HuffmanTree::Leaf(_, freq) => freq,
@@ -739,9 +727,17 @@ impl HuffmanTree {
     }
 }
 
+impl PartialEq for HuffmanTree {
+    fn eq(&self, other: &Self) -> bool {
+        self.frequency().eq(&other.frequency())
+    }
+}
+
+impl Eq for HuffmanTree {}
+
 impl Ord for HuffmanTree {
     fn cmp(&self, other: &Self) -> Ordering {
-        other.frequency().cmp(&self.frequency())
+        self.frequency().cmp(&other.frequency()).reverse()
     }
 }
 
@@ -751,6 +747,47 @@ impl PartialOrd for HuffmanTree {
     }
 }
 
+// fn flatten_huffman_tree(tree: Rc<HuffmanTree>) -> Vec<(i32, i32)> {
+//     let mut result = Vec::new();
+//     let mut queue = VecDeque::new();
+//     let mut node_index_map = HashMap::new();
+//     let mut current_index = 0;
+
+//     queue.push_back(tree.clone());
+//     node_index_map.insert(tree, current_index);
+//     current_index += 1;
+
+//     while let Some(node) = queue.pop_front() {
+//         match &*node {
+//             HuffmanTree::Leaf(symbol, _) => {
+//                 result.push((-1 - *symbol as i32, current_index as i32));
+//             }
+//             HuffmanTree::Node(left, right) => {
+//                 let left_index = *node_index_map.entry(left.clone()).or_insert_with(|| {
+//                     queue.push_back(left.clone());
+//                     let idx = current_index;
+//                     current_index += 1;
+//                     idx
+//                 });
+//                 let right_index = *node_index_map.entry(right.clone()).or_insert_with(|| {
+//                     queue.push_back(right.clone());
+//                     let idx = current_index;
+//                     current_index += 1;
+//                     idx
+//                 });
+//                 result.push((left_index as i32, right_index as i32));
+//             }
+//         }
+//     }
+
+//     // Ensure the last leaf's right-hand side index is set correctly
+//     if let Some((_, last)) = result.last_mut() {
+//         *last = -1; // Set to -1 to indicate the end
+//     }
+
+//     result
+// }
+
 fn build_huffman_tree(text: &str) -> HuffmanTree {
     let mut frequency_map = HashMap::new();
 
@@ -758,8 +795,6 @@ fn build_huffman_tree(text: &str) -> HuffmanTree {
         *frequency_map.entry(c).or_insert(0) += 1;
     }
 
-    println!("r {}", &frequency_map[&'r']);
-    println!("l {}", &frequency_map[&'l']);
     let mut heap = BinaryHeap::new();
 
     for (char, freq) in frequency_map {
@@ -769,7 +804,8 @@ fn build_huffman_tree(text: &str) -> HuffmanTree {
     while heap.len() > 1 {
         let left = heap.pop().unwrap();
         let right = heap.pop().unwrap();
-        heap.push(HuffmanTree::Node(Box::new(left), Box::new(right)));
+
+        heap.push(HuffmanTree::Node(Rc::new(left), Rc::new(right)));
     }
 
     heap.pop().unwrap()
@@ -793,7 +829,7 @@ fn generate_huffman_codes(node: &HuffmanTree, prefix: BitVec, codes: &mut HashMa
 }
 
 // Encode the input text
-fn encode_huffman(text: &str, codes: &HashMap<char, BitVec>, output: &mut BitVec) {
+fn encode_huffman(text: &str, codes: &HashMap<char, BitVec>, output: &mut BitVec<BitSafeU8, Lsb0>) {
     for character in text.chars() {
         if let Some(code) = codes.get(&character) {
             output.extend(code);
@@ -802,7 +838,7 @@ fn encode_huffman(text: &str, codes: &HashMap<char, BitVec>, output: &mut BitVec
 }
 
 pub struct Huffman {
-    tree: HuffmanTree,
+    tree: Rc<HuffmanTree>,
     mapping: HashMap<char, BitVec>,
 }
 
@@ -812,60 +848,13 @@ impl Huffman {
         let mut huffman_mapping = HashMap::new();
         generate_huffman_codes(&huffman_tree, BitVec::new(), &mut huffman_mapping);
         Self {
-            tree: huffman_tree,
+            tree: Rc::new(huffman_tree),
             mapping: huffman_mapping,
         }
     }
 
-    fn flatten_nodes<'b, 'a: 'b>(tree: &'a HuffmanTree, out: &mut Vec<&'b HuffmanTree>) {
-        match tree {
-            HuffmanTree::Node(left, right) => {
-                Self::flatten_nodes(left, out);
-                Self::flatten_nodes(right, out);
-                out.push(tree)
-            }
-            HuffmanTree::Leaf(_, _) => {}
-        }
-    }
-
-    pub fn collect_pairs_2(&self) -> Vec<(i32, i32)> {
-        let mut flat_nodes: Vec<&HuffmanTree> = Vec::new();
-        Self::flatten_nodes(&self.tree, &mut flat_nodes);
-        let mut pairs = Vec::new();
-
-        for node in &flat_nodes {
-            match node {
-                HuffmanTree::Node(left, right) => {
-                    let left = if let HuffmanTree::Leaf(symbol, _) = left.as_ref() {
-                        -1 - *symbol as i32
-                    } else {
-                        flat_nodes
-                            .iter()
-                            .position(|a| std::ptr::eq(left.as_ref(), *a))
-                            .map(|value| (value + 1) as i32)
-                            .unwrap_or(-1)
-                    };
-
-                    let right = if let HuffmanTree::Leaf(symbol, _) = right.as_ref() {
-                        -1 - *symbol as i32
-                    } else {
-                        flat_nodes
-                            .iter()
-                            .position(|a| std::ptr::eq(right.as_ref(), *a))
-                            .map(|value| (value + 1) as i32)
-                            .unwrap_or(-1)
-                    };
-
-                    pairs.push((left, right));
-                }
-                HuffmanTree::Leaf(_, _) => {}
-            };
-        }
-        println!("Collected pairs {pairs:?}");
-
-        pairs
-    }
-
+    /// Flattens the tree of huffman nodes into pairs where negative values are the symbols and
+    /// positive values are the next node index
     pub fn collect_pairs(&self) -> Vec<(i32, i32)> {
         let mut pairs: Vec<Rc<RefCell<(i32, i32)>>> = Vec::new();
         let mut mapping: HashMap<*const HuffmanTree, Rc<RefCell<(i32, i32)>>> = HashMap::new();
@@ -873,71 +862,52 @@ impl Huffman {
 
         let root_pair = Rc::new(RefCell::new((0, 0)));
 
-        mapping.insert(&self.tree, root_pair.clone());
+        mapping.insert(self.tree.as_ref(), root_pair.clone());
         queue.push_back(&self.tree);
 
         while let Some(node) = queue.pop_front() {
             let item = mapping.get(&(node as *const _)).unwrap().clone();
 
-            match node {
-                HuffmanTree::Node(left_node, right_node) => {
-                    if let HuffmanTree::Leaf(symbol, _) = left_node.as_ref() {
-                        item.borrow_mut().0 = -1 - *symbol as i32;
-                    } else {
-                        let left = Rc::new(RefCell::new((0, 0)));
+            if let HuffmanTree::Node(left_node, right_node) = node {
+                if let HuffmanTree::Leaf(symbol, _) = left_node.as_ref() {
+                    item.borrow_mut().0 = -1 - *symbol as i32;
+                } else {
+                    let left = Rc::new(RefCell::new((0, 0)));
 
-                        // Add empty left pair
-                        mapping.insert(left_node.as_ref(), left.clone());
-                        pairs.push(left.clone());
+                    // Add empty left pair
+                    mapping.insert(left_node.as_ref(), left.clone());
+                    pairs.push(left.clone());
 
-                        // Queue the left node
-                        queue.push_back(left_node.as_ref());
+                    // Queue the left node
+                    queue.push_back(left_node.as_ref());
 
-                        {
-                            let index = pairs
-                                .iter()
-                                .position(|a| Rc::ptr_eq(a, &left))
-                                .map(|value| (value) as i32)
-                                .unwrap_or(-1);
-
-                            item.borrow_mut().0 = index;
-                        }
-                    }
-
-                    if let HuffmanTree::Leaf(symbol, _) = right_node.as_ref() {
-                        item.borrow_mut().1 = -1 - *symbol as i32;
-
-                        if -1 - *symbol as i32 == -115 {
-                            println!("Symbol: {}", symbol);
-                        }
-                    } else {
-                        let right = Rc::new(RefCell::new((0, 0)));
-
-                        // Add empty right pair
-                        mapping.insert(right_node.as_ref(), right.clone());
-                        pairs.push(right.clone());
-
-                        queue.push_back(right_node.as_ref());
-
-                        {
-                            let index = pairs
-                                .iter()
-                                .position(|a| Rc::ptr_eq(a, &right))
-                                .map(|value| (value) as i32)
-                                .unwrap_or(-1);
-                            item.borrow_mut().1 = index;
-                        }
+                    {
+                        item.borrow_mut().0 = (pairs.len() - 1) as i32;
                     }
                 }
-                HuffmanTree::Leaf(_, _) => {
-                    panic!("Invalid operation: leaf node in queue");
+
+                if let HuffmanTree::Leaf(symbol, _) = right_node.as_ref() {
+                    item.borrow_mut().1 = -1 - *symbol as i32;
+                } else {
+                    let right = Rc::new(RefCell::new((0, 0)));
+
+                    // Add empty right pair
+                    mapping.insert(right_node.as_ref(), right.clone());
+                    pairs.push(right.clone());
+
+                    queue.push_back(right_node.as_ref());
+
+                    {
+                        item.borrow_mut().1 = (pairs.len() - 1) as i32;
+                    }
                 }
+            } else {
+                panic!("Invalid operation: leaf node in queue");
             }
         }
         pairs.push(root_pair);
 
         let pairs = pairs.into_iter().map(|value| *value.borrow()).collect();
-        println!("Collected pairs {pairs:?}");
         pairs
     }
 }
