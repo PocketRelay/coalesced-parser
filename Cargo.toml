@@ -1,7 +1,12 @@
 [package]
 name = "me3-coalesced-parser"
+description = "ME3 coalesced parser"
 version = "0.1.0"
 edition = "2021"
+keywords = ["EA", "PocketRelay", "MassEffect"]
+authors = ["Jacobtread <jacobtread@gmail.com>"]
+repository = "https://github.com/PocketRelay/coalesced-parser"
+license = "MIT"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
