@@ -1,7 +1,7 @@
 // Magic bytes for ME3
 pub const ME3_MAGIC: u32 = 0x666D726D;
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Coalesced {
     /// Coalesced version
     pub version: u32,
@@ -10,7 +10,7 @@ pub struct Coalesced {
 }
 
 /// File within the coalesced
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct CoalFile {
     /// The relative file path
     pub path: String,
@@ -18,7 +18,7 @@ pub struct CoalFile {
     pub sections: Vec<Section>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Section {
     /// The section name
     pub name: String,
@@ -26,7 +26,7 @@ pub struct Section {
     pub properties: Vec<Property>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Property {
     /// The name of the property
     pub name: String,
@@ -34,7 +34,7 @@ pub struct Property {
     pub values: Vec<Value>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Value {
     /// Value type
     pub ty: ValueType,
@@ -42,7 +42,7 @@ pub struct Value {
     pub text: Option<String>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, Copy)]
+#[derive(Debug, Hash, serde::Serialize, serde::Deserialize, Clone, Copy)]
 #[repr(u8)]
 pub enum ValueType {
     // Overwrite
