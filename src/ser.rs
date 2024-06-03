@@ -66,7 +66,7 @@ impl WriteBuffer {
 }
 
 /// Serializes the provided coalesced into bytes
-pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
+pub fn serialize_coalesced(coalesced: &Coalesced) -> Vec<u8> {
     let mut keys: HashSet<&str> = HashSet::new();
 
     let mut value_blob = String::new();
