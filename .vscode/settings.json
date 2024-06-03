@@ -1,5 +1,7 @@
 {
     "cSpell.words": [
-        "Deque"
+        "bitvec",
+        "Deque",
+        "Seekable"
     ]
 }

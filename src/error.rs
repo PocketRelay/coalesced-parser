@@ -1,22 +1,11 @@
-//! Error type used when decoding packets [`DecodeError`] and result
-//! type alias [`DecodeResult`]
+use std::{error::Error, fmt::Display};
 
-use std::{error::Error, fmt::Display, str::Utf8Error};
-
-/// Error type for errors that can occur while decoding a value
-/// using the tdf decode
 #[derive(Debug)]
-pub enum DecodeError {
-    /// Encountered an unknown tag type
-    UnknownType {
-        /// The tag type value
-        ty: u8,
-    },
-
+pub enum CoalescedError {
     /// Reached the end of the available bytes before
     /// a value could be obtained
     UnexpectedEof {
-        /// The current reader cusor position
+        /// The current reader cursor position
         cursor: usize,
         /// The number of bytes attempted to read
         wanted: usize,
@@ -24,27 +13,25 @@ pub enum DecodeError {
         remaining: usize,
     },
 
-    /// Attempted to decode a str slice but the content wasn't valid utf-8
-    InvalidUtf8Value(Utf8Error),
-
-    /// Other error type with custom message
-    Other(&'static str),
+    UnknownFileMagic,
+    StringTableHashMismatch,
+    StringTableSizeMismatch,
+    InvalidNameOffset,
+    UnknownValueType,
+    MalformedDecompressionNodes,
 }
 
-/// Type alias for result which could result in a Decode Error
-pub type DecodeResult<T> = Result<T, DecodeError>;
+/// Type alias for result which could result in a Coalesced Error
+pub type CoalResult<T> = Result<T, CoalescedError>;
 
 /// Error implementation
-impl Error for DecodeError {}
+impl Error for CoalescedError {}
 
 /// Display formatting implementation
-impl Display for DecodeError {
+impl Display for CoalescedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DecodeError::UnknownType { ty } => {
-                write!(f, "Unknown tag type: {}", ty)
-            }
-            DecodeError::UnexpectedEof {
+            CoalescedError::UnexpectedEof {
                 cursor,
                 wanted,
                 remaining,
@@ -55,8 +42,18 @@ impl Display for DecodeError {
                     cursor, wanted, remaining
                 )
             }
-            DecodeError::InvalidUtf8Value(err) => err.fmt(f),
-            DecodeError::Other(err) => f.write_str(err),
+            CoalescedError::UnknownFileMagic => f.write_str("Unexpected file magic bytes"),
+            CoalescedError::StringTableHashMismatch => {
+                f.write_str("String table hash didn't match")
+            }
+            CoalescedError::StringTableSizeMismatch => {
+                f.write_str("String table size didn't match")
+            }
+            CoalescedError::InvalidNameOffset => f.write_str("Invalid name offset"),
+            CoalescedError::UnknownValueType => f.write_str("Unknown value type"),
+            CoalescedError::MalformedDecompressionNodes => {
+                f.write_str("Decompression nodes are malformed")
+            }
         }
     }
 }
