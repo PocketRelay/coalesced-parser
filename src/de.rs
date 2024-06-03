@@ -84,11 +84,6 @@ impl<'de> ReadBuffer<'de> {
         let bytes = self.read_fixed::<4>()?;
         Ok(i32::from_le_bytes(bytes))
     }
-
-    pub fn read_i16(&mut self) -> CoalResult<i16> {
-        let bytes = self.read_fixed::<2>()?;
-        Ok(i16::from_le_bytes(bytes))
-    }
 }
 
 pub fn deserialize_coalesced(input: &[u8]) -> CoalResult<Coalesced> {

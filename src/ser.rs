@@ -9,17 +9,17 @@ use std::collections::HashSet;
 /// Seekable buffer implementation. Can seek beyond the end of the buffer. Writes
 /// past the end of the buffer grow the underlying buffer to match
 #[derive(Default)]
-pub struct WriteBuffer {
+struct WriteBuffer {
     /// The underlying byte buffer
-    pub buffer: Vec<u8>,
+    buffer: Vec<u8>,
     /// The current cursor position
-    pub cursor: usize,
+    cursor: usize,
     /// The length of the buffer that has been written to
-    pub length: usize,
+    length: usize,
 }
 
 impl WriteBuffer {
-    pub fn to_vec(mut self) -> Vec<u8> {
+    pub fn into_vec(mut self) -> Vec<u8> {
         self.buffer.truncate(self.length);
         self.buffer
     }
@@ -33,10 +33,6 @@ impl WriteBuffer {
     }
 
     pub fn write_i32(&mut self, value: i32) {
-        self.write_slice(&value.to_le_bytes());
-    }
-
-    pub fn write_i16(&mut self, value: i16) {
         self.write_slice(&value.to_le_bytes());
     }
 
@@ -153,7 +149,7 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
         string_table_buffer.seek(0);
         string_table_buffer.write_u32(string_table_buffer.length as u32);
 
-        string_table_buffer.to_vec()
+        string_table_buffer.into_vec()
     };
 
     let huffman = Huffman::new(&value_blob);
@@ -172,7 +168,7 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
             huffman_buffer.write_i32(*right);
         }
 
-        huffman_buffer.to_vec()
+        huffman_buffer.into_vec()
     };
 
     let huffman_size: usize = huffman_buffer.len();
@@ -184,10 +180,10 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
 
         let mut file_data_offset = 2 /* file counts */ + (coalesced.files.len() * 6);
 
-        let mut files: Vec<(u16, u32)> = Vec::new();
+        let mut file_offsets: Vec<(u16, u32)> = Vec::new();
 
         for file in &coalesced.files {
-            files.push((
+            file_offsets.push((
                 keys.iter()
                     .position(|key| key.eq(&file.path))
                     .expect("Missing file name key") as u16,
@@ -195,10 +191,10 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
             ));
 
             let mut section_data_offset = 2 + (file.sections.len() * 6);
-            let mut sections: Vec<(u16, u32)> = Vec::new();
+            let mut section_offset: Vec<(u16, u32)> = Vec::new();
 
             for section in &file.sections {
-                sections.push((
+                section_offset.push((
                     keys.iter()
                         .position(|key| key.eq(&section.name))
                         .expect("Missing section name key") as u16,
@@ -206,12 +202,12 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
                 ));
 
                 let mut value_data_offset = 2 + (section.properties.len() * 6);
-                let mut values: Vec<(u16, u32)> = Vec::new();
+                let mut property_offsets: Vec<(u16, u32)> = Vec::new();
 
                 for property in &section.properties {
                     index_buffer.seek(file_data_offset + section_data_offset + value_data_offset);
 
-                    values.push((
+                    property_offsets.push((
                         keys.iter()
                             .position(|key| key.eq(&property.name))
                             .expect("Missing property name key") as u16,
@@ -246,12 +242,12 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
 
                 index_buffer.seek(file_data_offset + section_data_offset);
 
-                index_buffer.write_u16(values.len() as u16);
+                index_buffer.write_u16(property_offsets.len() as u16);
                 section_data_offset += 2;
 
-                for value in values {
-                    index_buffer.write_u16(value.0);
-                    index_buffer.write_u32(value.1);
+                for (name_index, offset) in property_offsets {
+                    index_buffer.write_u16(name_index);
+                    index_buffer.write_u32(offset);
                     section_data_offset += 6;
                 }
 
@@ -260,13 +256,12 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
 
             index_buffer.seek(file_data_offset);
 
-            index_buffer.write_u16(sections.len() as u16);
+            index_buffer.write_u16(section_offset.len() as u16);
             file_data_offset += 2;
 
-            for section in sections {
-                index_buffer.write_u16(section.0);
-                index_buffer.write_u32(section.1);
-
+            for (name_index, offset) in section_offset {
+                index_buffer.write_u16(name_index);
+                index_buffer.write_u32(offset);
                 file_data_offset += 6;
             }
 
@@ -275,14 +270,14 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
 
         index_buffer.seek(0);
 
-        index_buffer.write_u16(files.len() as u16);
+        index_buffer.write_u16(file_offsets.len() as u16);
 
-        for file in files {
-            index_buffer.write_u16(file.0);
-            index_buffer.write_u32(file.1);
+        for (name_index, offset) in file_offsets {
+            index_buffer.write_u16(name_index);
+            index_buffer.write_u32(offset);
         }
 
-        index_buffer.to_vec()
+        index_buffer.into_vec()
     };
 
     let index_size: usize = index_buffer.len();
@@ -311,7 +306,7 @@ pub fn serialize_coalesced(coalesced: Coalesced) -> Vec<u8> {
     out.write_u32(total_bits as u32);
     out.write_slice(&data_bytes);
 
-    out.to_vec()
+    out.into_vec()
 }
 
 fn bit_to_bytes(mut bits: BitVec<BitSafeU8, Lsb0>) -> Vec<u8> {
