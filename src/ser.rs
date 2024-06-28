@@ -224,13 +224,9 @@ pub fn serialize_coalesced(coalesced: &Coalesced) -> Vec<u8> {
 
                     for item in &property.values {
                         let bit_offset = data_buffer.len();
-                        let text = match item.ty {
+                        let text: Option<&String> = match item.ty {
                             ValueType::RemoveProperty => None,
-                            _ => {
-                                let mut value = item.text.clone().unwrap_or_default();
-                                value.push('\0');
-                                Some(value)
-                            }
+                            _ => item.text.as_ref(),
                         };
 
                         // Combine the type and the offset
@@ -238,7 +234,8 @@ pub fn serialize_coalesced(coalesced: &Coalesced) -> Vec<u8> {
                             .write_u32(((item.ty as u8 as u32) << 29) | (bit_offset as u32));
 
                         if let Some(text) = text {
-                            huffman.encode(&text, &mut data_buffer);
+                            huffman.encode(text, &mut data_buffer);
+                            huffman.encode_null(&mut data_buffer);
                         }
 
                         value_data_offset += 4;
@@ -371,10 +368,8 @@ pub fn serialize_tlk(tlk: &Tlk) -> Vec<u8> {
             .for_each(|value| {
                 let bit_offset: usize = data_buffer.len();
 
-                let mut text = value.value.clone();
-                text.push('\0');
-
-                huffman.encode(&text, &mut data_buffer);
+                huffman.encode(&value.value, &mut data_buffer);
+                huffman.encode_null(&mut data_buffer);
 
                 ref_buffer.write_u32(value.id);
                 ref_buffer.write_u32(bit_offset as u32);

@@ -96,11 +96,15 @@ impl Huffman {
     /// Writes the huffman encoding bits representing the input text to the
     /// provided output buffer
     pub fn encode(&self, text: &str, output: &mut BitVec<BitSafeU8, Lsb0>) {
-        for character in text.chars() {
-            if let Some(code) = self.mapping.get(&character) {
-                output.extend(code);
-            }
-        }
+        text.chars()
+            .filter_map(|code| self.mapping.get(&code))
+            .for_each(|value| output.extend(value))
+    }
+
+    /// Helper to encode null bytes
+    pub fn encode_null(&self, output: &mut BitVec<BitSafeU8, Lsb0>) {
+        let code = self.mapping.get(&'\0').expect("Missing null byte encoding");
+        output.extend(code);
     }
 
     /// Decodes huffman encoded text
@@ -148,6 +152,11 @@ impl Huffman {
         let mut heap = BinaryHeap::new();
         for (char, freq) in freq.0 {
             heap.push(HuffmanTree::Leaf(char, freq));
+        }
+
+        // Handle empty frequencies
+        if heap.is_empty() {
+            return HuffmanTree::Leaf('\0', 0);
         }
 
         // Flatten the leafs into a tree
@@ -225,8 +234,6 @@ impl Huffman {
                 .get(&(node as *const _))
                 .expect("Missing mapping for current node");
 
-            let current_index = pair_refs.len() as i32;
-
             let HuffmanTree::Node(left_node, right_node) = node else {
                 // Not a possible state unless the implementation is broken
                 panic!("Invalid operation: leaf node in queue")
@@ -238,7 +245,7 @@ impl Huffman {
                 *left_value = -1 - *symbol as i32;
             } else {
                 // Update previous pair
-                *left_value = current_index;
+                *left_value = pair_refs.len() as i32;
 
                 // Add empty left pair
                 let pair_index = push_pair(&mut pairs_unordered, (0, 0));
@@ -256,7 +263,7 @@ impl Huffman {
                 *right_value = -1 - *symbol as i32;
             } else {
                 // Update previous pair
-                *right_value = current_index;
+                *right_value = pair_refs.len() as i32;
 
                 // Add empty left pair
                 let pair_index = push_pair(&mut pairs_unordered, (0, 0));
