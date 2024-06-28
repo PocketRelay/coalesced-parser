@@ -6,13 +6,18 @@ use std::{
 
 use crate::error::CoalescedError;
 
+/// Represents a node/leaf within a huffman tree
 #[derive(Debug)]
 enum HuffmanTree {
+    /// Node with a left and right path
     Node(Box<HuffmanTree>, Box<HuffmanTree>),
+    /// Leaf with a value and frequency
     Leaf(char, u32),
 }
 
 impl HuffmanTree {
+    /// Gets the frequency of this huffman tree node/leaf, for leafs this is
+    /// the value of the leaf for nodes this is the sum of both halves
     fn frequency(&self) -> u32 {
         match *self {
             HuffmanTree::Node(ref left, ref right) => left.frequency() + right.frequency(),
@@ -43,7 +48,7 @@ impl PartialOrd for HuffmanTree {
 
 /// Map containing character frequencies to build a huffman tree from
 #[derive(Default)]
-pub struct FrequencyMap(pub HashMap<char, u32>);
+pub struct FrequencyMap(HashMap<char, u32>);
 
 impl FrequencyMap {
     /// Updates the frequency map based on the characters
@@ -61,6 +66,7 @@ impl FrequencyMap {
     }
 }
 
+/// Huffman encoding state
 pub struct Huffman {
     /// Mapping from chars to their huffman encoded bits
     mapping: HashMap<char, BitVec>,
@@ -69,6 +75,7 @@ pub struct Huffman {
 }
 
 impl Huffman {
+    /// Creates a new huffman encoder from the provided frequency map
     pub fn new(freq: FrequencyMap) -> Self {
         let huffman_tree = Self::build_tree(freq);
         let mut huffman_mapping = HashMap::new();
@@ -81,11 +88,13 @@ impl Huffman {
         }
     }
 
+    /// Get a reference to the pairs for encoding
     pub fn get_pairs(&self) -> &[(i32, i32)] {
         &self.pairs
     }
 
-    // Encode the input text
+    /// Writes the huffman encoding bits representing the input text to the
+    /// provided output buffer
     pub fn encode(&self, text: &str, output: &mut BitVec<BitSafeU8, Lsb0>) {
         for character in text.chars() {
             if let Some(code) = self.mapping.get(&character) {
@@ -94,6 +103,7 @@ impl Huffman {
         }
     }
 
+    /// Decodes huffman encoded text
     pub fn decode(
         compressed_data: &[u8],
         pairs: &[(i32, i32)],
@@ -131,6 +141,8 @@ impl Huffman {
         Ok(sb)
     }
 
+    /// Builds a huffman tree root node from the provided
+    /// frequency map
     fn build_tree(freq: FrequencyMap) -> HuffmanTree {
         // Create the initial leafs for each character value
         let mut heap = BinaryHeap::new();
