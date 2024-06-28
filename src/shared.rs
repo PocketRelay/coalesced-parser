@@ -15,6 +15,46 @@ pub struct Tlk {
     pub female_values: Vec<TlkString>,
 }
 
+impl Tlk {
+    /// Replaces a string with the provided ID with a new value
+    pub fn replace_male(&mut self, id: u32, value: String) -> bool {
+        if let Some(entry) = self.male_values.iter_mut().find(|value| value.id == id) {
+            entry.value = value;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Inserts a value into the tlk attempting to replace an existing one
+    pub fn insert_male(&mut self, id: u32, value: String) {
+        if self.replace_male(id, value.clone()) {
+            return;
+        }
+
+        self.male_values.push(TlkString { id, value })
+    }
+
+    /// Replaces a string with the provided ID with a new value
+    pub fn replace_female(&mut self, id: u32, value: String) -> bool {
+        if let Some(entry) = self.female_values.iter_mut().find(|value| value.id == id) {
+            entry.value = value;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Inserts a value into the tlk attempting to replace an existing one
+    pub fn insert_female(&mut self, id: u32, value: String) {
+        if self.replace_female(id, value.clone()) {
+            return;
+        }
+
+        self.female_values.push(TlkString { id, value })
+    }
+}
+
 /// String within a tlk file
 #[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TlkString {
