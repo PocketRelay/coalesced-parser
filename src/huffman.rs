@@ -48,7 +48,7 @@ impl PartialOrd for HuffmanTree {
 
 /// Map containing character frequencies to build a huffman tree from
 #[derive(Default)]
-pub struct FrequencyMap(HashMap<char, u32>);
+pub(crate) struct FrequencyMap(HashMap<char, u32>);
 
 impl FrequencyMap {
     /// Updates the frequency map based on the characters
@@ -67,7 +67,7 @@ impl FrequencyMap {
 }
 
 /// Huffman encoding state
-pub struct Huffman {
+pub(crate) struct Huffman {
     /// Mapping from chars to their huffman encoded bits
     mapping: HashMap<char, BitVec>,
     /// Flattened pairs from the huffman tree

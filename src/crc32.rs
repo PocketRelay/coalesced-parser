@@ -33,7 +33,7 @@ static CRC32_TABLE: &[u32] = &[
     0xAFB010B1, 0xAB710D06, 0xA6322BDF, 0xA2F33668, 0xBCB4666D, 0xB8757BDA, 0xB5365D03, 0xB1F740B4,
 ];
 
-pub fn hash_crc32(bin_data: &[u8]) -> u32 {
+pub(crate) fn hash_crc32(bin_data: &[u8]) -> u32 {
     let mut hash = !0;
     for t in bin_data {
         hash = CRC32_TABLE[((hash >> 24) as u8 ^ t) as usize] ^ (hash << 8);

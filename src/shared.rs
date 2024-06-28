@@ -103,7 +103,7 @@ impl TryFrom<u8> for ValueType {
 /// The TLK format encodes them in the opposite direction
 /// to the Coalesced file so its easier to just flip them
 /// than write separate implementations
-pub fn invert_huffman_tree(pairs: &mut Vec<(i32, i32)>) {
+pub(crate) fn invert_huffman_tree(pairs: &mut Vec<(i32, i32)>) {
     let last_index = (pairs.len() - 1) as i32;
 
     // Reverse the pair order
