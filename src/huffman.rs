@@ -1,9 +1,7 @@
 use bitvec::{access::BitSafeU8, order::Lsb0, vec::BitVec};
 use std::{
-    cell::RefCell,
     cmp::Ordering,
     collections::{BinaryHeap, HashMap, VecDeque},
-    rc::Rc,
 };
 
 use crate::error::CoalescedError;
@@ -64,7 +62,9 @@ impl FrequencyMap {
 }
 
 pub struct Huffman {
+    /// Mapping from chars to their huffman encoded bits
     mapping: HashMap<char, BitVec>,
+    /// Flattened pairs from the huffman tree
     pairs: Vec<(i32, i32)>,
 }
 
@@ -74,6 +74,7 @@ impl Huffman {
         let mut huffman_mapping = HashMap::new();
         Self::generate_huffman_codes(&huffman_tree, BitVec::new(), &mut huffman_mapping);
         let pairs = Self::collect_pairs(&huffman_tree);
+
         Self {
             mapping: huffman_mapping,
             pairs,
@@ -148,6 +149,9 @@ impl Huffman {
         heap.pop().unwrap()
     }
 
+    /// Creates the combination of bits that represents each character by
+    /// traversing the huffman tree storing the path that it took to get
+    /// there.
     fn generate_huffman_codes(
         node: &HuffmanTree,
         prefix: BitVec,
@@ -169,62 +173,97 @@ impl Huffman {
         }
     }
 
-    /// Flattens the tree of huffman nodes into pairs where negative values are the symbols and
-    /// positive values are the next node index
+    /// Flattens the tree of huffman nodes into an array of pairs where:
+    ///
+    /// - Negative values represent the actual character literal
+    /// - Positive values represent the next index to visit
+    ///
+    /// When decoding the decoder uses the encoded bit to decide which
+    /// half of the pair it should use, encoding characters when it hits
+    /// the negative values and continuing to the target pair when hitting
+    /// a positive value
     fn collect_pairs(root: &HuffmanTree) -> Vec<(i32, i32)> {
-        let mut pairs: Vec<Rc<RefCell<(i32, i32)>>> = Vec::new();
-        let mut mapping: HashMap<*const HuffmanTree, Rc<RefCell<(i32, i32)>>> = HashMap::new();
+        // Actual pairs themselves (Not the correct order)
+        let mut pairs_unordered: Vec<(i32, i32)> = Vec::new();
+
+        // References to the actual order of inserted pairs (Index into unordered list)
+        let mut pair_refs: Vec<usize> = Vec::new();
+
+        // References to pairs based on their huffman tree node/leaf (Index into unordered list)
+        let mut tree_ref: HashMap<*const HuffmanTree, usize> = HashMap::new();
+
+        // Queue of nodes to process
         let mut queue: VecDeque<&HuffmanTree> = VecDeque::new();
 
-        let root_pair = Rc::new(RefCell::new((0, 0)));
+        // Pushes a new pair returning its index
+        let push_pair = |pairs: &mut Vec<(i32, i32)>, pair: (i32, i32)| {
+            let pair_index = pairs.len();
+            pairs.push(pair);
+            pair_index
+        };
 
-        mapping.insert(root, root_pair.clone());
+        // Push root un-ordered pair
+        let root_pair = push_pair(&mut pairs_unordered, (0, 0));
+        tree_ref.insert(root, root_pair);
+
         queue.push_back(root);
 
         while let Some(node) = queue.pop_front() {
-            let item = mapping.get(&(node as *const _)).unwrap().clone();
+            let node_index = *tree_ref
+                .get(&(node as *const _))
+                .expect("Missing mapping for current node");
 
-            if let HuffmanTree::Node(left_node, right_node) = node {
-                if let HuffmanTree::Leaf(symbol, _) = left_node.as_ref() {
-                    item.borrow_mut().0 = -1 - *symbol as i32;
-                } else {
-                    let left = Rc::new(RefCell::new((0, 0)));
+            let current_index = pair_refs.len() as i32;
 
-                    // Add empty left pair
-                    mapping.insert(left_node.as_ref(), left.clone());
-                    pairs.push(left.clone());
-
-                    // Queue the left node
-                    queue.push_back(left_node.as_ref());
-
-                    {
-                        item.borrow_mut().0 = (pairs.len() - 1) as i32;
-                    }
-                }
-
-                if let HuffmanTree::Leaf(symbol, _) = right_node.as_ref() {
-                    item.borrow_mut().1 = -1 - *symbol as i32;
-                } else {
-                    let right = Rc::new(RefCell::new((0, 0)));
-
-                    // Add empty right pair
-                    mapping.insert(right_node.as_ref(), right.clone());
-                    pairs.push(right.clone());
-
-                    queue.push_back(right_node.as_ref());
-
-                    {
-                        item.borrow_mut().1 = (pairs.len() - 1) as i32;
-                    }
-                }
-            } else {
+            let HuffmanTree::Node(left_node, right_node) = node else {
                 // Not a possible state unless the implementation is broken
-                panic!("Invalid operation: leaf node in queue");
+                panic!("Invalid operation: leaf node in queue")
+            };
+
+            let left_value = &mut pairs_unordered[node_index].0;
+
+            if let HuffmanTree::Leaf(symbol, _) = left_node.as_ref() {
+                *left_value = -1 - *symbol as i32;
+            } else {
+                // Update previous pair
+                *left_value = current_index;
+
+                // Add empty left pair
+                let pair_index = push_pair(&mut pairs_unordered, (0, 0));
+
+                tree_ref.insert(left_node.as_ref(), pair_index);
+                pair_refs.push(pair_index);
+
+                // Queue the left node
+                queue.push_back(left_node.as_ref());
+            }
+
+            let right_value = &mut pairs_unordered[node_index].1;
+
+            if let HuffmanTree::Leaf(symbol, _) = right_node.as_ref() {
+                *right_value = -1 - *symbol as i32;
+            } else {
+                // Update previous pair
+                *right_value = current_index;
+
+                // Add empty left pair
+                let pair_index = push_pair(&mut pairs_unordered, (0, 0));
+
+                tree_ref.insert(right_node.as_ref(), pair_index);
+                pair_refs.push(pair_index);
+
+                // Queue the left node
+                queue.push_back(right_node.as_ref());
             }
         }
-        pairs.push(root_pair);
 
-        let pairs = pairs.into_iter().map(|value| *value.borrow()).collect();
-        pairs
+        // Push the root pair
+        pair_refs.push(root_pair);
+
+        // Collect the actual pairs using the refs to unordered mapping
+        pair_refs
+            .into_iter()
+            .map(|index| pairs_unordered[index])
+            .collect()
     }
 }
