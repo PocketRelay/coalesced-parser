@@ -3,6 +3,9 @@ pub const ME3_MAGIC: u32 = 0x666D726D;
 /// Magic bytes for the ME3 tlk file
 pub const TLK_MAGIC: u32 = 0x006B6C54;
 
+pub type WChar = u16;
+pub type WString = Vec<u16>;
+
 /// Tlk file
 #[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Tlk {
@@ -17,7 +20,7 @@ pub struct Tlk {
 
 impl Tlk {
     /// Replaces a string with the provided ID with a new value
-    pub fn replace_male(&mut self, id: u32, value: String) -> bool {
+    pub fn replace_male(&mut self, id: u32, value: WString) -> bool {
         if let Some(entry) = self.male_values.iter_mut().find(|value| value.id == id) {
             entry.value = value;
             true
@@ -27,7 +30,7 @@ impl Tlk {
     }
 
     /// Inserts a value into the tlk attempting to replace an existing one
-    pub fn insert_male(&mut self, id: u32, value: String) {
+    pub fn insert_male(&mut self, id: u32, value: WString) {
         if self.replace_male(id, value.clone()) {
             return;
         }
@@ -36,7 +39,7 @@ impl Tlk {
     }
 
     /// Replaces a string with the provided ID with a new value
-    pub fn replace_female(&mut self, id: u32, value: String) -> bool {
+    pub fn replace_female(&mut self, id: u32, value: WString) -> bool {
         if let Some(entry) = self.female_values.iter_mut().find(|value| value.id == id) {
             entry.value = value;
             true
@@ -46,7 +49,7 @@ impl Tlk {
     }
 
     /// Inserts a value into the tlk attempting to replace an existing one
-    pub fn insert_female(&mut self, id: u32, value: String) {
+    pub fn insert_female(&mut self, id: u32, value: WString) {
         if self.replace_female(id, value.clone()) {
             return;
         }
@@ -61,7 +64,7 @@ pub struct TlkString {
     /// ID of the value
     pub id: u32,
     /// The string value itself
-    pub value: String,
+    pub value: WString,
 }
 
 /// Coalesced file

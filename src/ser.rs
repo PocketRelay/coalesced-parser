@@ -1,6 +1,7 @@
 use crate::{
     crc32::hash_crc32,
     huffman::{FrequencyMap, Huffman},
+    huffman_utf16::{FrequencyMapUtf16, HuffmanUtf16},
     invert_huffman_tree,
     shared::{Coalesced, ValueType, ME3_MAGIC},
     Tlk, TLK_MAGIC,
@@ -327,7 +328,7 @@ pub fn serialize_tlk(tlk: &Tlk) -> Vec<u8> {
     let female_entry_count: u32 = tlk.female_values.len() as u32;
 
     let huffman = {
-        let mut freq = FrequencyMap::default();
+        let mut freq = FrequencyMapUtf16::default();
 
         // Create a frequency map for the huffman tree with all the values
         tlk.male_values
@@ -335,10 +336,10 @@ pub fn serialize_tlk(tlk: &Tlk) -> Vec<u8> {
             .chain(tlk.female_values.iter())
             .for_each(|value| {
                 freq.push_str(&value.value);
-                freq.push('\0')
+                freq.push(0)
             });
 
-        Huffman::new(freq)
+        HuffmanUtf16::new(freq)
     };
 
     let (huffman_buffer, tree_node_count) = {
