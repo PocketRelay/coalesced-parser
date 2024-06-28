@@ -9,14 +9,14 @@ use crate::{error::CoalescedError, WChar, WString};
 
 /// Represents a node/leaf within a huffman tree
 #[derive(Debug)]
-enum HuffmanTree<C: HuffmanChar> {
+enum HuffmanTree<C> {
     /// Node with a left and right path
     Node(Box<HuffmanTree<C>>, Box<HuffmanTree<C>>),
     /// Leaf with a value and frequency
     Leaf(C, u32),
 }
 
-impl<C: HuffmanChar> HuffmanTree<C> {
+impl<C> HuffmanTree<C> {
     /// Gets the frequency of this huffman tree node/leaf, for leafs this is
     /// the value of the leaf for nodes this is the sum of both halves
     fn frequency(&self) -> u32 {
@@ -27,21 +27,21 @@ impl<C: HuffmanChar> HuffmanTree<C> {
     }
 }
 
-impl<C: HuffmanChar> PartialEq for HuffmanTree<C> {
+impl<C> PartialEq for HuffmanTree<C> {
     fn eq(&self, other: &Self) -> bool {
         self.frequency().eq(&other.frequency())
     }
 }
 
-impl<C: HuffmanChar> Eq for HuffmanTree<C> {}
+impl<C> Eq for HuffmanTree<C> {}
 
-impl<C: HuffmanChar> Ord for HuffmanTree<C> {
+impl<C> Ord for HuffmanTree<C> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.frequency().cmp(&other.frequency()).reverse()
     }
 }
 
-impl<C: HuffmanChar> PartialOrd for HuffmanTree<C> {
+impl<C> PartialOrd for HuffmanTree<C> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -64,13 +64,19 @@ impl<C: HuffmanChar> FrequencyMap<C> {
     }
 }
 
+/// Trait implemented by types that can be decoded as strings
+/// by the huffman encoding
 pub trait HuffmanString: 'static {
+    /// Character type this string uses
     type Char: HuffmanChar;
 
+    /// Creates a new string instance
     fn new() -> Self;
 
+    /// Appends a char to the string
     fn append_char(&mut self, value: Self::Char);
 
+    /// Gets the length of the string
     fn len(&self) -> usize;
 }
 
@@ -112,19 +118,20 @@ impl HuffmanString for WString {
     }
 }
 
+/// Trait implemented by types that can be used as an individual
+/// character within the huffman encoding
 pub trait HuffmanChar: Hash + PartialEq + Eq + Copy + 'static {
-    type Str: HuffmanString;
-
+    /// Character representing null for this type
     const NULL: Self;
 
+    /// Converts the value into a huffman symbol
     fn as_symbol(self) -> i32;
 
+    /// Creates a char from a huffman symbol
     fn from_symbol(value: i32) -> Self;
 }
 
 impl HuffmanChar for char {
-    type Str = String;
-
     const NULL: Self = '\0';
 
     #[inline]
@@ -139,8 +146,6 @@ impl HuffmanChar for char {
 }
 
 impl HuffmanChar for WChar {
-    type Str = WString;
-
     const NULL: Self = 0;
 
     #[inline]
