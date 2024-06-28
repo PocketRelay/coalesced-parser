@@ -2,12 +2,14 @@ use crate::{
     crc32::hash_crc32,
     error::{CoalResult, CoalescedError},
     huffman::Huffman,
+    invert_huffman_tree,
     shared::{CoalFile, Coalesced, Property, Section, Value, ValueType, ME3_MAGIC},
+    Tlk, TlkString, TLK_MAGIC,
 };
 use std::borrow::Cow;
 
 /// Seekable read buffer
-struct ReadBuffer<'de> {
+pub struct ReadBuffer<'de> {
     /// Buffer storing the bytes to be deserialized
     buffer: &'de [u8],
     /// Cursor representing the current offset within the buffer
@@ -292,4 +294,78 @@ pub fn deserialize_coalesced(input: &[u8]) -> CoalResult<Coalesced> {
     let coalesced = Coalesced { version, files };
 
     Ok(coalesced)
+}
+
+pub fn deserialize_tlk(input: &[u8]) -> CoalResult<Tlk> {
+    let mut r = ReadBuffer::new(input);
+
+    let magic = r.read_u32()?;
+
+    if magic != TLK_MAGIC {
+        return Err(CoalescedError::UnknownFileMagic);
+    }
+
+    let version = r.read_u32()?;
+    let min_version = r.read_u32()?;
+    let male_entry_count = r.read_u32()?;
+    let female_entry_count = r.read_u32()?;
+    let tree_node_count = r.read_u32()?;
+    let data_length = r.read_u32()?;
+
+    let mut male_refs = Vec::<(u32, u32)>::with_capacity(male_entry_count as usize);
+    let mut female_refs = Vec::<(u32, u32)>::with_capacity(female_entry_count as usize);
+
+    for _ in 0..male_entry_count {
+        let left = r.read_u32()?;
+        let right = r.read_u32()?;
+
+        male_refs.push((left, right));
+    }
+
+    for _ in 0..female_entry_count {
+        let left = r.read_u32()?;
+        let right = r.read_u32()?;
+
+        female_refs.push((left, right));
+    }
+
+    let mut huffman_tree: Vec<(i32, i32)> = Vec::with_capacity(tree_node_count as usize);
+
+    // Read the huffman tree
+    for _ in 0..tree_node_count {
+        let left = r.read_i32()?;
+        let right = r.read_i32()?;
+        huffman_tree.push((left, right))
+    }
+
+    invert_huffman_tree(&mut huffman_tree);
+
+    // Read the data block
+    let data_block: &[u8] = r.take_slice(data_length as usize)?.buffer;
+
+    let mut male_values: Vec<TlkString> = Vec::new();
+    let mut female_values: Vec<TlkString> = Vec::new();
+
+    for (key, offset) in male_refs {
+        let text = Huffman::decode(data_block, &huffman_tree, offset as usize, usize::MAX)?;
+        male_values.push(TlkString {
+            id: key,
+            value: text,
+        })
+    }
+
+    for (key, offset) in female_refs {
+        let text = Huffman::decode(data_block, &huffman_tree, offset as usize, usize::MAX)?;
+        female_values.push(TlkString {
+            id: key,
+            value: text,
+        })
+    }
+
+    Ok(Tlk {
+        version,
+        min_version,
+        male_values,
+        female_values,
+    })
 }

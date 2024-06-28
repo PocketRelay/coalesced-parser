@@ -1,5 +1,27 @@
 // Magic bytes for ME3
 pub const ME3_MAGIC: u32 = 0x666D726D;
+pub const TLK_MAGIC: u32 = 0x006B6C54;
+
+// Tlk file
+#[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
+pub struct Tlk {
+    pub version: u32,
+    pub min_version: u32,
+
+    // Male tlk strings
+    pub male_values: Vec<TlkString>,
+    // Female tlk strings
+    pub female_values: Vec<TlkString>,
+}
+
+/// String within a tlk file
+#[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
+pub struct TlkString {
+    // ID of the value
+    pub id: u32,
+    // The string value itself
+    pub value: String,
+}
 
 #[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Coalesced {
@@ -71,5 +93,28 @@ impl TryFrom<u8> for ValueType {
             4 => Self::Remove,
             _ => return Err(UnknownValueType),
         })
+    }
+}
+
+/// Invests the order of the provided huffman pairs
+///
+/// The TLK format encodes them in the opposite direction
+/// to the Coalesced file so its easier to just flip them
+/// than write separate implementations
+pub fn invert_huffman_tree(pairs: &mut Vec<(i32, i32)>) {
+    let last_index = (pairs.len() - 1) as i32;
+
+    // Reverse the pair order
+    pairs.reverse();
+
+    // Update the pair indexes to match the new order
+    for pair in pairs {
+        if pair.0 > -1 {
+            pair.0 = last_index - pair.0
+        }
+
+        if pair.1 > -1 {
+            pair.1 = last_index - pair.1
+        }
     }
 }

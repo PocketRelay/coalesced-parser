@@ -1,7 +1,9 @@
 use crate::{
     crc32::hash_crc32,
     huffman::Huffman,
+    invert_huffman_tree,
     shared::{Coalesced, ValueType, ME3_MAGIC},
+    Tlk, TLK_MAGIC,
 };
 use bitvec::{access::BitSafeU8, order::Lsb0, store::BitStore, vec::BitVec};
 use std::collections::HashSet;
@@ -316,4 +318,78 @@ fn bit_to_bytes(mut bits: BitVec<BitSafeU8, Lsb0>) -> Vec<u8> {
         .into_iter()
         .map(|value| value.load_value())
         .collect()
+}
+
+pub fn serialize_tlk(tlk: &Tlk) -> Vec<u8> {
+    let mut out = WriteBuffer::default();
+
+    let male_entry_count: u32 = tlk.male_values.len() as u32;
+    let female_entry_count: u32 = tlk.female_values.len() as u32;
+
+    // Create a blob of all values for the huffman tree
+    let mut value_blob = String::new();
+
+    tlk.male_values
+        .iter()
+        .chain(tlk.female_values.iter())
+        .for_each(|value| {
+            value_blob.push_str(&value.value);
+            value_blob.push('\0')
+        });
+
+    let huffman = Huffman::new(&value_blob);
+    let (huffman_buffer, tree_node_count) = {
+        let mut huffman_buffer: WriteBuffer = WriteBuffer::default();
+
+        let mut pairs = huffman.get_pairs().to_vec();
+        invert_huffman_tree(&mut pairs);
+
+        let tree_node_count = pairs.len() as u32;
+
+        // Write the pairs
+        for (left, right) in pairs {
+            huffman_buffer.write_i32(left);
+            huffman_buffer.write_i32(right);
+        }
+
+        (huffman_buffer.into_vec(), tree_node_count)
+    };
+
+    let mut data_buffer: BitVec<BitSafeU8, Lsb0> = BitVec::new();
+    let mut ref_buffer = WriteBuffer::default();
+
+    {
+        tlk.male_values
+            .iter()
+            .chain(tlk.female_values.iter())
+            .for_each(|value| {
+                let bit_offset: usize = data_buffer.len();
+
+                let mut text = value.value.clone();
+                text.push('\0');
+
+                huffman.encode(&text, &mut data_buffer);
+
+                ref_buffer.write_u32(value.id);
+                ref_buffer.write_u32(bit_offset as u32);
+            });
+    }
+
+    let data_bytes = bit_to_bytes(data_buffer);
+
+    // Write the headers
+    out.write_u32(TLK_MAGIC);
+    out.write_u32(tlk.version);
+    out.write_u32(tlk.min_version);
+    out.write_u32(male_entry_count);
+    out.write_u32(female_entry_count);
+    out.write_u32(tree_node_count);
+    out.write_u32(data_bytes.len() as u32);
+
+    // Write the contents
+    out.write_slice(&ref_buffer.buffer);
+    out.write_slice(&huffman_buffer);
+    out.write_slice(&data_bytes);
+
+    out.into_vec()
 }
