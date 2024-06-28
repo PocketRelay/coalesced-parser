@@ -1,4 +1,7 @@
-use std::{fs::File, io::Read};
+use std::{
+    fs::File,
+    io::{Read, Write},
+};
 
 use me3_coalesced_parser::{deserialize_coalesced, serialize_coalesced};
 
@@ -24,5 +27,9 @@ fn test_coalesced_rebuild() {
     let bytes = serialize_coalesced(&coalesced);
 
     // Parse
-    let _coalesced = deserialize_coalesced(&bytes).expect("Failed to parse coalesced");
+    let coalesced = deserialize_coalesced(&bytes).expect("Failed to parse coalesced");
+
+    let mut out = File::create("./private/coalesced.json").unwrap();
+    out.write_all(serde_json::to_string_pretty(&coalesced).unwrap().as_bytes())
+        .unwrap();
 }
