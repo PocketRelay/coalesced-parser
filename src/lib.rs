@@ -1,6 +1,5 @@
 mod crc32;
 mod huffman;
-mod huffman_utf16;
 
 pub mod de;
 pub mod error;

@@ -2,7 +2,6 @@ use crate::{
     crc32::hash_crc32,
     error::{CoalResult, CoalescedError},
     huffman::Huffman,
-    huffman_utf16::HuffmanUtf16,
     invert_huffman_tree,
     shared::{CoalFile, Coalesced, Property, Section, Value, ValueType, ME3_MAGIC},
     Tlk, TlkString, TLK_MAGIC,
@@ -352,7 +351,7 @@ pub fn deserialize_tlk(input: &[u8]) -> CoalResult<Tlk> {
 
     // Decode the male ref values
     for (key, offset) in male_refs {
-        let text = HuffmanUtf16::decode(data_block, &huffman_tree, offset as usize, usize::MAX)?;
+        let text = Huffman::decode(data_block, &huffman_tree, offset as usize, usize::MAX)?;
         male_values.push(TlkString {
             id: key,
             value: text,
@@ -361,7 +360,7 @@ pub fn deserialize_tlk(input: &[u8]) -> CoalResult<Tlk> {
 
     // Decode the female ref values
     for (key, offset) in female_refs {
-        let text = HuffmanUtf16::decode(data_block, &huffman_tree, offset as usize, usize::MAX)?;
+        let text = Huffman::decode(data_block, &huffman_tree, offset as usize, usize::MAX)?;
         female_values.push(TlkString {
             id: key,
             value: text,

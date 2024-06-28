@@ -2,20 +2,21 @@ use bitvec::{access::BitSafeU8, order::Lsb0, vec::BitVec};
 use std::{
     cmp::Ordering,
     collections::{BinaryHeap, HashMap, VecDeque},
+    hash::Hash,
 };
 
-use crate::error::CoalescedError;
+use crate::{error::CoalescedError, WChar, WString};
 
 /// Represents a node/leaf within a huffman tree
 #[derive(Debug)]
-enum HuffmanTree {
+enum HuffmanTree<C: HuffmanChar> {
     /// Node with a left and right path
-    Node(Box<HuffmanTree>, Box<HuffmanTree>),
+    Node(Box<HuffmanTree<C>>, Box<HuffmanTree<C>>),
     /// Leaf with a value and frequency
-    Leaf(char, u32),
+    Leaf(C, u32),
 }
 
-impl HuffmanTree {
+impl<C: HuffmanChar> HuffmanTree<C> {
     /// Gets the frequency of this huffman tree node/leaf, for leafs this is
     /// the value of the leaf for nodes this is the sum of both halves
     fn frequency(&self) -> u32 {
@@ -26,21 +27,21 @@ impl HuffmanTree {
     }
 }
 
-impl PartialEq for HuffmanTree {
+impl<C: HuffmanChar> PartialEq for HuffmanTree<C> {
     fn eq(&self, other: &Self) -> bool {
         self.frequency().eq(&other.frequency())
     }
 }
 
-impl Eq for HuffmanTree {}
+impl<C: HuffmanChar> Eq for HuffmanTree<C> {}
 
-impl Ord for HuffmanTree {
+impl<C: HuffmanChar> Ord for HuffmanTree<C> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.frequency().cmp(&other.frequency()).reverse()
     }
 }
 
-impl PartialOrd for HuffmanTree {
+impl<C: HuffmanChar> PartialOrd for HuffmanTree<C> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -48,35 +49,122 @@ impl PartialOrd for HuffmanTree {
 
 /// Map containing character frequencies to build a huffman tree from
 #[derive(Default)]
-pub(crate) struct FrequencyMap(HashMap<char, u32>);
+pub(crate) struct FrequencyMap<C: HuffmanChar>(HashMap<C, u32>);
 
-impl FrequencyMap {
-    /// Updates the frequency map based on the characters
-    /// present in the provided string
-    pub fn push_str(&mut self, value: &str) {
-        for c in value.chars() {
-            self.push(c)
-        }
+impl<C: HuffmanChar> FrequencyMap<C> {
+    /// Updates the frequency map from the provided iterator
+    pub fn push_iter<I: IntoIterator<Item = C>>(&mut self, iter: I) {
+        iter.into_iter().for_each(|value| self.push(value))
     }
 
     /// Updates the frequency map for the provided character
     #[inline]
-    pub fn push(&mut self, value: char) {
+    pub fn push(&mut self, value: C) {
         *self.0.entry(value).or_insert(0) += 1;
     }
 }
 
+pub trait HuffmanString: 'static {
+    type Char: HuffmanChar;
+
+    fn new() -> Self;
+
+    fn append_char(&mut self, value: Self::Char);
+
+    fn len(&self) -> usize;
+}
+
+impl HuffmanString for String {
+    type Char = char;
+
+    #[inline]
+    fn new() -> Self {
+        String::new()
+    }
+
+    #[inline]
+    fn append_char(&mut self, value: Self::Char) {
+        self.push(value)
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
+impl HuffmanString for WString {
+    type Char = WChar;
+
+    #[inline]
+    fn new() -> Self {
+        WString::new()
+    }
+
+    #[inline]
+    fn append_char(&mut self, value: Self::Char) {
+        self.push(value)
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
+pub trait HuffmanChar: Hash + PartialEq + Eq + Copy + 'static {
+    type Str: HuffmanString;
+
+    const NULL: Self;
+
+    fn as_symbol(self) -> i32;
+
+    fn from_symbol(value: i32) -> Self;
+}
+
+impl HuffmanChar for char {
+    type Str = String;
+
+    const NULL: Self = '\0';
+
+    #[inline]
+    fn as_symbol(self) -> i32 {
+        self as i32
+    }
+
+    #[inline]
+    fn from_symbol(value: i32) -> Self {
+        value as u8 as char
+    }
+}
+
+impl HuffmanChar for WChar {
+    type Str = WString;
+
+    const NULL: Self = 0;
+
+    #[inline]
+    fn as_symbol(self) -> i32 {
+        self as i32
+    }
+
+    #[inline]
+    fn from_symbol(value: i32) -> Self {
+        value as WChar
+    }
+}
+
 /// Huffman encoding state
-pub(crate) struct Huffman {
+pub(crate) struct Huffman<C: HuffmanChar> {
     /// Mapping from chars to their huffman encoded bits
-    mapping: HashMap<char, BitVec>,
+    mapping: HashMap<C, BitVec>,
     /// Flattened pairs from the huffman tree
     pairs: Vec<(i32, i32)>,
 }
 
-impl Huffman {
+impl<C: HuffmanChar> Huffman<C> {
     /// Creates a new huffman encoder from the provided frequency map
-    pub fn new(freq: FrequencyMap) -> Self {
+    pub fn new(freq: FrequencyMap<C>) -> Self {
         let huffman_tree = Self::build_tree(freq);
         let mapping = Self::generate_huffman_codes(&huffman_tree);
         let pairs = Self::collect_pairs(&huffman_tree);
@@ -91,26 +179,29 @@ impl Huffman {
 
     /// Writes the huffman encoding bits representing the input text to the
     /// provided output buffer
-    pub fn encode(&self, text: &str, output: &mut BitVec<BitSafeU8, Lsb0>) {
-        text.chars()
+    pub fn encode<I: IntoIterator<Item = C>>(&self, iter: I, output: &mut BitVec<BitSafeU8, Lsb0>) {
+        iter.into_iter()
             .filter_map(|code| self.mapping.get(&code))
             .for_each(|value| output.extend(value))
     }
 
     /// Helper to encode null bytes
     pub fn encode_null(&self, output: &mut BitVec<BitSafeU8, Lsb0>) {
-        let code = self.mapping.get(&'\0').expect("Missing null byte encoding");
+        let code = self
+            .mapping
+            .get(&C::NULL)
+            .expect("Missing null byte encoding");
         output.extend(code);
     }
 
     /// Decodes huffman encoded text
-    pub fn decode(
+    pub fn decode<S: HuffmanString<Char = C>>(
         compressed_data: &[u8],
         pairs: &[(i32, i32)],
         position: usize,
         max_length: usize,
-    ) -> Result<String, CoalescedError> {
-        let mut sb = String::new();
+    ) -> Result<S, CoalescedError> {
+        let mut sb = S::new();
         let mut cur_node = pairs.len() - 1;
         let end = compressed_data.len() * 8;
 
@@ -122,11 +213,11 @@ impl Huffman {
             let next = if sample != 0 { next.1 } else { next.0 };
 
             if next < 0 {
-                let ch = (-1 - next) as u16;
+                let ch = -1 - next;
                 if ch == 0 {
                     break;
                 }
-                sb.push(ch as u8 as char);
+                sb.append_char(S::Char::from_symbol(ch));
                 cur_node = pairs.len() - 1;
             } else {
                 cur_node = next as usize;
@@ -143,7 +234,7 @@ impl Huffman {
 
     /// Builds a huffman tree root node from the provided
     /// frequency map
-    fn build_tree(freq: FrequencyMap) -> HuffmanTree {
+    fn build_tree(freq: FrequencyMap<C>) -> HuffmanTree<C> {
         // Create the initial leafs for each character value
         let mut heap = BinaryHeap::new();
         for (char, freq) in freq.0 {
@@ -152,7 +243,7 @@ impl Huffman {
 
         // Handle empty frequencies
         if heap.is_empty() {
-            return HuffmanTree::Leaf('\0', 0);
+            return HuffmanTree::Leaf(C::NULL, 0);
         }
 
         // Flatten the leafs into a tree
@@ -169,7 +260,7 @@ impl Huffman {
     /// Creates the combination of bits that represents each character by
     /// traversing the huffman tree storing the path that it took to get
     /// there.
-    fn generate_huffman_codes(node: &HuffmanTree) -> HashMap<char, BitVec> {
+    fn generate_huffman_codes(node: &HuffmanTree<C>) -> HashMap<C, BitVec> {
         let mut codes = HashMap::new();
         let mut stack = VecDeque::new();
         stack.push_back((node, BitVec::new()));
@@ -203,7 +294,7 @@ impl Huffman {
     /// half of the pair it should use, encoding characters when it hits
     /// the negative values and continuing to the target pair when hitting
     /// a positive value
-    fn collect_pairs(root: &HuffmanTree) -> Vec<(i32, i32)> {
+    fn collect_pairs(root: &HuffmanTree<C>) -> Vec<(i32, i32)> {
         // Actual pairs themselves (Not the correct order)
         let mut pairs_unordered: Vec<(i32, i32)> = Vec::new();
 
@@ -211,10 +302,10 @@ impl Huffman {
         let mut pair_refs: Vec<usize> = Vec::new();
 
         // References to pairs based on their huffman tree node/leaf (Index into unordered list)
-        let mut tree_ref: HashMap<*const HuffmanTree, usize> = HashMap::new();
+        let mut tree_ref: HashMap<*const HuffmanTree<C>, usize> = HashMap::new();
 
         // Queue of nodes to process
-        let mut queue: VecDeque<&HuffmanTree> = VecDeque::new();
+        let mut queue: VecDeque<&HuffmanTree<C>> = VecDeque::new();
 
         // Pushes a new pair returning its index
         let push_pair = |pairs: &mut Vec<(i32, i32)>, pair: (i32, i32)| {
@@ -242,7 +333,7 @@ impl Huffman {
             let left_value = &mut pairs_unordered[node_index].0;
 
             if let HuffmanTree::Leaf(symbol, _) = left_node.as_ref() {
-                *left_value = -1 - *symbol as i32;
+                *left_value = -1 - (*symbol).as_symbol();
             } else {
                 // Update previous pair
                 *left_value = pair_refs.len() as i32;
@@ -260,7 +351,7 @@ impl Huffman {
             let right_value = &mut pairs_unordered[node_index].1;
 
             if let HuffmanTree::Leaf(symbol, _) = right_node.as_ref() {
-                *right_value = -1 - *symbol as i32;
+                *right_value = -1 - (*symbol).as_symbol();
             } else {
                 // Update previous pair
                 *right_value = pair_refs.len() as i32;

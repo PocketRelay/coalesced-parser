@@ -1,10 +1,9 @@
 use crate::{
     crc32::hash_crc32,
     huffman::{FrequencyMap, Huffman},
-    huffman_utf16::{FrequencyMapUtf16, HuffmanUtf16},
     invert_huffman_tree,
     shared::{Coalesced, ValueType, ME3_MAGIC},
-    Tlk, TLK_MAGIC,
+    Tlk, WChar, TLK_MAGIC,
 };
 use bitvec::{access::BitSafeU8, order::Lsb0, store::BitStore, vec::BitVec};
 use std::collections::HashSet;
@@ -74,8 +73,8 @@ pub fn serialize_coalesced(coalesced: &Coalesced) -> Vec<u8> {
 
     let mut max_value_length = 0;
 
-    let huffman = {
-        let mut freq = FrequencyMap::default();
+    let huffman: Huffman<char> = {
+        let mut freq = FrequencyMap::<char>::default();
 
         // Collect all keys for the string table
         for file in &coalesced.files {
@@ -90,7 +89,7 @@ pub fn serialize_coalesced(coalesced: &Coalesced) -> Vec<u8> {
                     for item in &value.values {
                         if let Some(text) = &item.text {
                             // Collect blob of values for huffman encoded data
-                            freq.push_str(text);
+                            freq.push_iter(text.chars());
                             freq.push('\0');
 
                             let value_length = text.len();
@@ -235,7 +234,7 @@ pub fn serialize_coalesced(coalesced: &Coalesced) -> Vec<u8> {
                             .write_u32(((item.ty as u8 as u32) << 29) | (bit_offset as u32));
 
                         if let Some(text) = text {
-                            huffman.encode(text, &mut data_buffer);
+                            huffman.encode(text.chars(), &mut data_buffer);
                             huffman.encode_null(&mut data_buffer);
                         }
 
@@ -327,19 +326,19 @@ pub fn serialize_tlk(tlk: &Tlk) -> Vec<u8> {
     let male_entry_count: u32 = tlk.male_values.len() as u32;
     let female_entry_count: u32 = tlk.female_values.len() as u32;
 
-    let huffman = {
-        let mut freq = FrequencyMapUtf16::default();
+    let huffman: Huffman<WChar> = {
+        let mut freq = FrequencyMap::<WChar>::default();
 
         // Create a frequency map for the huffman tree with all the values
         tlk.male_values
             .iter()
             .chain(tlk.female_values.iter())
             .for_each(|value| {
-                freq.push_str(&value.value);
+                freq.push_iter(value.value.iter().copied());
                 freq.push(0)
             });
 
-        HuffmanUtf16::new(freq)
+        Huffman::new(freq)
     };
 
     let (huffman_buffer, tree_node_count) = {
@@ -369,7 +368,7 @@ pub fn serialize_tlk(tlk: &Tlk) -> Vec<u8> {
             .for_each(|value| {
                 let bit_offset: usize = data_buffer.len();
 
-                huffman.encode(&value.value, &mut data_buffer);
+                huffman.encode(value.value.iter().copied(), &mut data_buffer);
                 huffman.encode_null(&mut data_buffer);
 
                 ref_buffer.write_u32(value.id);
