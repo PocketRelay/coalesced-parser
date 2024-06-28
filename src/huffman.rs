@@ -43,14 +43,34 @@ impl PartialOrd for HuffmanTree {
     }
 }
 
+/// Map containing character frequencies to build a huffman tree from
+#[derive(Default)]
+pub struct FrequencyMap(pub HashMap<char, u32>);
+
+impl FrequencyMap {
+    /// Updates the frequency map based on the characters
+    /// present in the provided string
+    pub fn push_str(&mut self, value: &str) {
+        for c in value.chars() {
+            self.push(c)
+        }
+    }
+
+    /// Updates the frequency map for the provided character
+    #[inline]
+    pub fn push(&mut self, value: char) {
+        *self.0.entry(value).or_insert(0) += 1;
+    }
+}
+
 pub struct Huffman {
     mapping: HashMap<char, BitVec>,
     pairs: Vec<(i32, i32)>,
 }
 
 impl Huffman {
-    pub fn new(text: &str) -> Self {
-        let huffman_tree = Self::build_tree(text);
+    pub fn new(freq: FrequencyMap) -> Self {
+        let huffman_tree = Self::build_tree(freq);
         let mut huffman_mapping = HashMap::new();
         Self::generate_huffman_codes(&huffman_tree, BitVec::new(), &mut huffman_mapping);
         let pairs = Self::collect_pairs(&huffman_tree);
@@ -110,16 +130,10 @@ impl Huffman {
         Ok(sb)
     }
 
-    fn build_tree(text: &str) -> HuffmanTree {
-        // Get the frequency for each character
-        let mut frequency_map = HashMap::new();
-        for c in text.chars() {
-            *frequency_map.entry(c).or_insert(0) += 1;
-        }
-
+    fn build_tree(freq: FrequencyMap) -> HuffmanTree {
         // Create the initial leafs for each character value
         let mut heap = BinaryHeap::new();
-        for (char, freq) in frequency_map {
+        for (char, freq) in freq.0 {
             heap.push(HuffmanTree::Leaf(char, freq));
         }
 

@@ -1,6 +1,6 @@
 use crate::{
     crc32::hash_crc32,
-    huffman::Huffman,
+    huffman::{FrequencyMap, Huffman},
     invert_huffman_tree,
     shared::{Coalesced, ValueType, ME3_MAGIC},
     Tlk, TLK_MAGIC,
@@ -71,34 +71,39 @@ impl WriteBuffer {
 pub fn serialize_coalesced(coalesced: &Coalesced) -> Vec<u8> {
     let mut keys: HashSet<&str> = HashSet::new();
 
-    let mut value_blob = String::new();
     let mut max_value_length = 0;
 
-    // Collect all keys for the string table
-    for file in &coalesced.files {
-        keys.insert(&file.path);
+    let huffman = {
+        let mut freq = FrequencyMap::default();
 
-        for section in &file.sections {
-            keys.insert(&section.name);
+        // Collect all keys for the string table
+        for file in &coalesced.files {
+            keys.insert(&file.path);
 
-            for value in &section.properties {
-                keys.insert(&value.name);
+            for section in &file.sections {
+                keys.insert(&section.name);
 
-                for item in &value.values {
-                    if let Some(text) = &item.text {
-                        // Collect blob of values for huffman encoded data
-                        value_blob.push_str(text);
-                        value_blob.push('\0');
+                for value in &section.properties {
+                    keys.insert(&value.name);
 
-                        let value_length = text.len();
-                        if value_length > max_value_length {
-                            max_value_length = value_length;
+                    for item in &value.values {
+                        if let Some(text) = &item.text {
+                            // Collect blob of values for huffman encoded data
+                            freq.push_str(text);
+                            freq.push('\0');
+
+                            let value_length = text.len();
+                            if value_length > max_value_length {
+                                max_value_length = value_length;
+                            }
                         }
                     }
                 }
             }
         }
-    }
+
+        Huffman::new(freq)
+    };
 
     // Sort the keys
     let mut keys: Vec<&str> = keys.into_iter().collect();
@@ -153,8 +158,6 @@ pub fn serialize_coalesced(coalesced: &Coalesced) -> Vec<u8> {
 
         string_table_buffer.into_vec()
     };
-
-    let huffman = Huffman::new(&value_blob);
 
     let huffman_buffer = {
         let mut huffman_buffer: WriteBuffer = WriteBuffer::default();
@@ -326,18 +329,21 @@ pub fn serialize_tlk(tlk: &Tlk) -> Vec<u8> {
     let male_entry_count: u32 = tlk.male_values.len() as u32;
     let female_entry_count: u32 = tlk.female_values.len() as u32;
 
-    // Create a blob of all values for the huffman tree
-    let mut value_blob = String::new();
+    let huffman = {
+        let mut freq = FrequencyMap::default();
 
-    tlk.male_values
-        .iter()
-        .chain(tlk.female_values.iter())
-        .for_each(|value| {
-            value_blob.push_str(&value.value);
-            value_blob.push('\0')
-        });
+        // Create a frequency map for the huffman tree with all the values
+        tlk.male_values
+            .iter()
+            .chain(tlk.female_values.iter())
+            .for_each(|value| {
+                freq.push_str(&value.value);
+                freq.push('\0')
+            });
 
-    let huffman = Huffman::new(&value_blob);
+        Huffman::new(freq)
+    };
+
     let (huffman_buffer, tree_node_count) = {
         let mut huffman_buffer: WriteBuffer = WriteBuffer::default();
 

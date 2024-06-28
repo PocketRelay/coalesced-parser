@@ -305,6 +305,7 @@ pub fn deserialize_tlk(input: &[u8]) -> CoalResult<Tlk> {
         return Err(CoalescedError::UnknownFileMagic);
     }
 
+    // Header block
     let version = r.read_u32()?;
     let min_version = r.read_u32()?;
     let male_entry_count = r.read_u32()?;
@@ -315,6 +316,7 @@ pub fn deserialize_tlk(input: &[u8]) -> CoalResult<Tlk> {
     let mut male_refs = Vec::<(u32, u32)>::with_capacity(male_entry_count as usize);
     let mut female_refs = Vec::<(u32, u32)>::with_capacity(female_entry_count as usize);
 
+    // Read the male refs
     for _ in 0..male_entry_count {
         let left = r.read_u32()?;
         let right = r.read_u32()?;
@@ -322,6 +324,7 @@ pub fn deserialize_tlk(input: &[u8]) -> CoalResult<Tlk> {
         male_refs.push((left, right));
     }
 
+    // Read the female refs
     for _ in 0..female_entry_count {
         let left = r.read_u32()?;
         let right = r.read_u32()?;
@@ -343,9 +346,10 @@ pub fn deserialize_tlk(input: &[u8]) -> CoalResult<Tlk> {
     // Read the data block
     let data_block: &[u8] = r.take_slice(data_length as usize)?.buffer;
 
-    let mut male_values: Vec<TlkString> = Vec::new();
-    let mut female_values: Vec<TlkString> = Vec::new();
+    let mut male_values: Vec<TlkString> = Vec::with_capacity(male_refs.len());
+    let mut female_values: Vec<TlkString> = Vec::with_capacity(female_refs.len());
 
+    // Decode the male ref values
     for (key, offset) in male_refs {
         let text = Huffman::decode(data_block, &huffman_tree, offset as usize, usize::MAX)?;
         male_values.push(TlkString {
@@ -354,6 +358,7 @@ pub fn deserialize_tlk(input: &[u8]) -> CoalResult<Tlk> {
         })
     }
 
+    // Decode the female ref values
     for (key, offset) in female_refs {
         let text = Huffman::decode(data_block, &huffman_tree, offset as usize, usize::MAX)?;
         female_values.push(TlkString {
