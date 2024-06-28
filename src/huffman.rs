@@ -78,14 +78,10 @@ impl Huffman {
     /// Creates a new huffman encoder from the provided frequency map
     pub fn new(freq: FrequencyMap) -> Self {
         let huffman_tree = Self::build_tree(freq);
-        let mut huffman_mapping = HashMap::new();
-        Self::generate_huffman_codes(&huffman_tree, BitVec::new(), &mut huffman_mapping);
+        let mapping = Self::generate_huffman_codes(&huffman_tree);
         let pairs = Self::collect_pairs(&huffman_tree);
 
-        Self {
-            mapping: huffman_mapping,
-            pairs,
-        }
+        Self { mapping, pairs }
     }
 
     /// Get a reference to the pairs for encoding
@@ -173,25 +169,29 @@ impl Huffman {
     /// Creates the combination of bits that represents each character by
     /// traversing the huffman tree storing the path that it took to get
     /// there.
-    fn generate_huffman_codes(
-        node: &HuffmanTree,
-        prefix: BitVec,
-        codes: &mut HashMap<char, BitVec>,
-    ) {
-        match node {
-            HuffmanTree::Node(left, right) => {
-                let mut left_prefix = prefix.clone();
-                left_prefix.push(false);
-                Self::generate_huffman_codes(left, left_prefix, codes);
+    fn generate_huffman_codes(node: &HuffmanTree) -> HashMap<char, BitVec> {
+        let mut codes = HashMap::new();
+        let mut stack = VecDeque::new();
+        stack.push_back((node, BitVec::new()));
 
-                let mut right_prefix = prefix;
-                right_prefix.push(true);
-                Self::generate_huffman_codes(right, right_prefix, codes);
-            }
-            HuffmanTree::Leaf(char, _) => {
-                codes.insert(*char, prefix);
+        while let Some((current_node, prefix)) = stack.pop_back() {
+            match current_node {
+                HuffmanTree::Node(left, right) => {
+                    let mut left_prefix = prefix.clone();
+                    left_prefix.push(false);
+                    stack.push_back((left, left_prefix));
+
+                    let mut right_prefix = prefix;
+                    right_prefix.push(true);
+                    stack.push_back((right, right_prefix));
+                }
+                HuffmanTree::Leaf(char, _) => {
+                    codes.insert(*char, prefix);
+                }
             }
         }
+
+        codes
     }
 
     /// Flattens the tree of huffman nodes into an array of pairs where:
