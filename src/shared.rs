@@ -56,6 +56,50 @@ impl Tlk {
 
         self.female_values.push(TlkString { id, value })
     }
+
+    // Replaces a string with the provided ID with a new value
+    pub fn replace_male_utf8(&mut self, id: u32, value: String) -> bool {
+        if let Some(entry) = self.male_values.iter_mut().find(|value| value.id == id) {
+            entry.value = value.encode_utf16().collect();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Inserts a value into the tlk attempting to replace an existing one
+    pub fn insert_male_utf8(&mut self, id: u32, value: String) {
+        if self.replace_male_utf8(id, value.clone()) {
+            return;
+        }
+
+        self.male_values.push(TlkString {
+            id,
+            value: value.encode_utf16().collect(),
+        })
+    }
+
+    /// Replaces a string with the provided ID with a new value
+    pub fn replace_female_utf8(&mut self, id: u32, value: String) -> bool {
+        if let Some(entry) = self.female_values.iter_mut().find(|value| value.id == id) {
+            entry.value = value.encode_utf16().collect();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Inserts a value into the tlk attempting to replace an existing one
+    pub fn insert_female_utf8(&mut self, id: u32, value: String) {
+        if self.replace_female_utf8(id, value.clone()) {
+            return;
+        }
+
+        self.female_values.push(TlkString {
+            id,
+            value: value.encode_utf16().collect(),
+        })
+    }
 }
 
 /// String within a tlk file
