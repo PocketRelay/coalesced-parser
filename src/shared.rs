@@ -1,28 +1,30 @@
-// Magic bytes for ME3
+/// Magic bytes for ME3
 pub const ME3_MAGIC: u32 = 0x666D726D;
+/// Magic bytes for the ME3 tlk file
 pub const TLK_MAGIC: u32 = 0x006B6C54;
 
-// Tlk file
+/// Tlk file
 #[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Tlk {
     pub version: u32,
     pub min_version: u32,
 
-    // Male tlk strings
+    /// Male tlk strings
     pub male_values: Vec<TlkString>,
-    // Female tlk strings
+    /// Female tlk strings
     pub female_values: Vec<TlkString>,
 }
 
 /// String within a tlk file
 #[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TlkString {
-    // ID of the value
+    /// ID of the value
     pub id: u32,
-    // The string value itself
+    /// The string value itself
     pub value: String,
 }
 
+/// Coalesced file
 #[derive(Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Coalesced {
     /// Coalesced version
