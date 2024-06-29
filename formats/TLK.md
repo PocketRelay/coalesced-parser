@@ -61,5 +61,5 @@ The file is divided into three main sections:
 
 ## 6. Data Encoding
 - **Numeric Data:** All numeric values are stored as little-endian.
-- **Text Data:** Values are UTF-16 encoded strings, padded with null bytes.
+- **Text Data:** Values are UTF-16 encoded strings, terminated with a null byte.
 - **Compression:** Values are compressed using huffman encoding
