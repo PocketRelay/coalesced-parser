@@ -54,9 +54,9 @@ All multi-byte values are stored in little-endian format.
 The file is divided into three main sections:
 
 1. **Header:** Contains file metadata (28 bytes).
-2. **Male Entries:** Contains multiple [Entry](#entry) fields with the amount specified in the header
-2. **Female Entries:** Contains multiple [Entry](#entry) fields with the amount specified in the header
-3. **Huffman Nodes:** Contains the encoded huffman nodes
+2. **Male Entries:** Contains multiple [Entries](#entry) fields with the amount specified in the header Male Entry Count 
+2. **Female Entries:** Contains multiple [Entries](#entry) fields with the amount specified in the header Female Entry Count
+3. **Huffman Nodes:** Contains multiple [Huffman Nodes](#huffman-node) with the amount specified in the header Tree Node Count
 4. **Data Bytes:** The huffman encoded bit values (Array of bytes to the length specified in the header)
 
 ## 6. Data Encoding
