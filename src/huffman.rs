@@ -5,7 +5,7 @@ use std::{
     hash::Hash,
 };
 
-use crate::{error::CoalescedError, WChar, WString};
+use crate::{error::DecodeError, WChar, WString};
 
 /// Represents a node/leaf within a huffman tree
 #[derive(Debug)]
@@ -205,7 +205,7 @@ impl<C: HuffmanChar> Huffman<C> {
         pairs: &[(i32, i32)],
         position: usize,
         max_length: usize,
-    ) -> Result<S, CoalescedError> {
+    ) -> Result<S, DecodeError> {
         let mut sb = S::new();
         let mut cur_node = pairs.len() - 1;
         let end = compressed_data.len() * 8;
@@ -227,7 +227,7 @@ impl<C: HuffmanChar> Huffman<C> {
             } else {
                 cur_node = next as usize;
                 if cur_node > pairs.len() {
-                    return Err(CoalescedError::MalformedDecompressionNodes);
+                    return Err(DecodeError::MalformedDecompressionNodes);
                 }
             }
 

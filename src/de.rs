@@ -1,6 +1,6 @@
 use crate::{
     crc32::hash_crc32,
-    error::{CoalResult, CoalescedError},
+    error::{DecodeError, DecodeResult},
     huffman::Huffman,
     invert_huffman_tree,
     shared::{CoalFile, Coalesced, Property, Section, Value, ValueType, ME3_MAGIC},
@@ -29,9 +29,9 @@ impl<'de> ReadBuffer<'de> {
     }
 
     /// Internal function used to read a slice of bytes from the buffer
-    pub(crate) fn read_bytes(&mut self, length: usize) -> CoalResult<&'de [u8]> {
+    pub(crate) fn read_bytes(&mut self, length: usize) -> DecodeResult<&'de [u8]> {
         if self.cursor + length > self.buffer.len() {
-            return Err(CoalescedError::UnexpectedEof {
+            return Err(DecodeError::UnexpectedEof {
                 cursor: self.cursor,
                 wanted: length,
                 remaining: self.remaining(),
@@ -43,9 +43,9 @@ impl<'de> ReadBuffer<'de> {
         Ok(slice)
     }
 
-    pub(crate) fn seek(&mut self, cursor: usize) -> CoalResult<()> {
+    pub(crate) fn seek(&mut self, cursor: usize) -> DecodeResult<()> {
         if cursor >= self.buffer.len() {
-            return Err(CoalescedError::UnexpectedEof {
+            return Err(DecodeError::UnexpectedEof {
                 cursor: self.cursor,
                 wanted: cursor,
                 remaining: self.remaining(),
@@ -58,7 +58,7 @@ impl<'de> ReadBuffer<'de> {
     }
 
     /// Internal function for reading a fixed length array from the buffer
-    pub(crate) fn read_fixed<const S: usize>(&mut self) -> CoalResult<[u8; S]> {
+    pub(crate) fn read_fixed<const S: usize>(&mut self) -> DecodeResult<[u8; S]> {
         let slice = self.read_bytes(S)?;
 
         // Copy the bytes into the new fixed size array
@@ -68,33 +68,33 @@ impl<'de> ReadBuffer<'de> {
         Ok(bytes)
     }
 
-    pub fn take_slice(&mut self, length: usize) -> CoalResult<ReadBuffer<'de>> {
+    pub fn take_slice(&mut self, length: usize) -> DecodeResult<ReadBuffer<'de>> {
         Ok(Self::new(self.read_bytes(length)?))
     }
 
-    pub fn read_u32(&mut self) -> CoalResult<u32> {
+    pub fn read_u32(&mut self) -> DecodeResult<u32> {
         let bytes = self.read_fixed::<4>()?;
         Ok(u32::from_le_bytes(bytes))
     }
 
-    pub fn read_u16(&mut self) -> CoalResult<u16> {
+    pub fn read_u16(&mut self) -> DecodeResult<u16> {
         let bytes = self.read_fixed::<2>()?;
         Ok(u16::from_le_bytes(bytes))
     }
 
-    pub fn read_i32(&mut self) -> CoalResult<i32> {
+    pub fn read_i32(&mut self) -> DecodeResult<i32> {
         let bytes = self.read_fixed::<4>()?;
         Ok(i32::from_le_bytes(bytes))
     }
 }
 
-pub fn deserialize_coalesced(input: &[u8]) -> CoalResult<Coalesced> {
+pub fn deserialize_coalesced(input: &[u8]) -> DecodeResult<Coalesced> {
     let mut r = ReadBuffer::new(input);
     // Read the file header
     let magic = r.read_u32()?;
 
     if magic != ME3_MAGIC {
-        return Err(CoalescedError::UnknownFileMagic);
+        return Err(DecodeError::UnknownFileMagic);
     }
 
     let version = r.read_u32()?;
@@ -112,7 +112,7 @@ pub fn deserialize_coalesced(input: &[u8]) -> CoalResult<Coalesced> {
         let local_size = string_table_block.read_u32()?;
 
         if local_size != string_table_size {
-            return Err(CoalescedError::StringTableSizeMismatch);
+            return Err(DecodeError::StringTableSizeMismatch);
         }
 
         let count = string_table_block.read_u32()?;
@@ -135,7 +135,7 @@ pub fn deserialize_coalesced(input: &[u8]) -> CoalResult<Coalesced> {
             let text: String = text.to_string();
 
             if hash_crc32(text.as_bytes()) != hash {
-                return Err(CoalescedError::StringTableHashMismatch);
+                return Err(DecodeError::StringTableHashMismatch);
             }
 
             values.push(text);
@@ -187,7 +187,7 @@ pub fn deserialize_coalesced(input: &[u8]) -> CoalResult<Coalesced> {
         let file_name_index = index_block.read_u16()?;
         let file_name = string_table
             .get(file_name_index as usize)
-            .ok_or(CoalescedError::InvalidNameOffset)?;
+            .ok_or(DecodeError::InvalidNameOffset)?;
 
         // Read the file offset
         let file_offset = index_block.read_u32()?;
@@ -210,7 +210,7 @@ pub fn deserialize_coalesced(input: &[u8]) -> CoalResult<Coalesced> {
             let section_name_index = index_block.read_u16()?;
             let section_name = string_table
                 .get(section_name_index as usize)
-                .ok_or(CoalescedError::InvalidNameOffset)?;
+                .ok_or(DecodeError::InvalidNameOffset)?;
 
             // Read the section offset
             let section_offset = index_block.read_u32()?;
@@ -231,7 +231,7 @@ pub fn deserialize_coalesced(input: &[u8]) -> CoalResult<Coalesced> {
                 let value_name_index = index_block.read_u16()?;
                 let value_name = string_table
                     .get(value_name_index as usize)
-                    .ok_or(CoalescedError::InvalidNameOffset)?;
+                    .ok_or(DecodeError::InvalidNameOffset)?;
 
                 // Read the value offset
                 let value_offset = index_block.read_u32()?;
@@ -253,8 +253,8 @@ pub fn deserialize_coalesced(input: &[u8]) -> CoalResult<Coalesced> {
                     let ty = (item_offset & 0xE0000000) >> 29;
                     let item_offset = item_offset & 0x1fffffff;
 
-                    let ty = ValueType::try_from(ty as u8)
-                        .map_err(|_| CoalescedError::UnknownValueType)?;
+                    let ty =
+                        ValueType::try_from(ty as u8).map_err(|_| DecodeError::UnknownValueType)?;
 
                     let text = match ty {
                         ValueType::RemoveProperty => None,
@@ -296,13 +296,13 @@ pub fn deserialize_coalesced(input: &[u8]) -> CoalResult<Coalesced> {
     Ok(coalesced)
 }
 
-pub fn deserialize_tlk(input: &[u8]) -> CoalResult<Tlk> {
+pub fn deserialize_tlk(input: &[u8]) -> DecodeResult<Tlk> {
     let mut r = ReadBuffer::new(input);
 
     let magic = r.read_u32()?;
 
     if magic != TLK_MAGIC {
-        return Err(CoalescedError::UnknownFileMagic);
+        return Err(DecodeError::UnknownFileMagic);
     }
 
     // Header block
